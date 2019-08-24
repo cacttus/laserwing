@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "outDir": "./dist/",
+    "noImplicitAny": true,
+    "sourceMap": true,
+     //Replaced none from es6
+     //see: https://github.com/Microsoft/TypeScript/issues/11879
+    "module": "es6",
+    "target": "es5",
+    "jsx": "react",
+    "allowJs": true 
+  }
+}
