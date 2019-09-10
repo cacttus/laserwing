@@ -1,51 +1,37 @@
 <!DOCTYPE html>
-<!--
-To change this license header, choose License Headers in Project Properties.
-To change this template file, choose Tools | Templates
-and open the template in the editor.
--->
-<!--
-<html>
-    <head>
-        <title>Threejs_Test</title>
-        <meta charset="UTF-8">
-        <style>
-        * {
-                margin: 0;
-                padding: 0;
-        }
-        /*Make canvas the size of the viewport*/
-        canvas {
-        width: 100vw;
-        height: 100vh;
-        display: block;
-      }
-        </style>
-    </head>
-    <body>
-        <canvas width = "300" height = "300" id = "my_Canvas"></canvas>
-    </body>
-           
-    <script src="main.bundle.js"></script>
 
-</html>
--->
 
 <html>
-	<head>
-		<meta charset=utf-8>
-		<title>My first three.js app</title>
-		<style>
-			body { margin: 0; }
-			canvas { width: 100%; height: 100% }
-		</style>
-	</head>
-	<body>
-        Yo
-        <script>
+
+<head>
+	<meta charset=utf-8>
+	<title>My first three.js app</title>
+	<style>
+		body {
+			margin: 0;
+		}
+
+
+		.canvas {
+			width:100%;
+			height:100%;
+		}
+
+	</style>
+</head>
+
+<body>
+	<div style="width:100%;height:100%;">
+
+		<!-- Main canvas on page-->
+		<canvas id="page_canvas" class="canvas"></canvas>
+
+	</div>
+	<script>
 			// Our Javascript will go here.
-		</script>
-		
-    </body>
-    <script src="main.bundle.js"></script>
+	</script>
+
+</body>
+<script src="main.bundle.js"></script>
+
 </html>
