@@ -22,6 +22,7 @@ export class TextCanvas extends THREE.Object3D {
   public AlignToScreen = false;
   public ScreenX = 0;
   public ScreenY = 0;
+  public ScreenZ = 2;
 
   public Newlines: boolean = true; //whether we process \n on separate line
 
@@ -225,9 +226,9 @@ export class TextCanvas extends THREE.Object3D {
 
     //We may actually be able to do this without sticking these ont eh screen.
     //Set the rotation equal to camera
-    this.rotation.x = user.rotation.x;
-    this.rotation.y = user.rotation.y;
-    this.rotation.z = user.rotation.z;
+    this.rotation.x = camera.rotation.x;
+    this.rotation.y = camera.rotation.y;
+    this.rotation.z = camera.rotation.z;
 
   }
 }

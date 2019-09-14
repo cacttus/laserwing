@@ -1,7 +1,7 @@
 import * as $ from "jquery";
 import * as THREE from 'three';
 import * as Physijs from 'physijs-webpack';
-import { Vector3, Vector2, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene } from 'three';
+import { Vector3, Vector2, Vector4, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3 } from 'three';
 
 import { WEBVR } from 'three/examples/jsm/vr/WebVR.js';
 import * as GLTFLoader_ from 'three/examples/jsm/loaders/GLTFLoader';
@@ -13,17 +13,27 @@ import { TextCanvas, TextCanvasOptions } from './TextCanvas';
 import * as Globals from './globals';
 //import * as Mersenne from 'mersenne-twister';//https://github.com/boo1ean/mersenne-twister
 
+
 /**
  * Put all files here
  */
 namespace Files {
   export enum Audio {
     Shoot = 'shoot.ogg',
+    Bomb_Shoot = 'bomb_shoot.ogg',
+    Bomb = 'bomb.ogg',
+    Nope = 'nope.ogg',
+    Ship_Explode = 'ship_explode.ogg',
+    Ship_Hit = 'ship_hit.ogg',
+    Electro_Sketch = 'electro_sketch.ogg',
   }
   export enum Model {
     Player_Ship = 'player_ship.glb',
     Enemy_Ship = 'enemy_ship.glb',
+    Enemy_Ship2 = 'enemy_ship2.glb',
     Bullet = 'bullet.glb',
+    Bomb = 'bomb.glb',
+    Bomb_Explosion = 'bomb_explosion.glb',
   }
 }
 //https://stackoverflow.com/questions/38213926/interface-for-associative-object-array-in-typescript
@@ -31,13 +41,14 @@ interface Dictionary<T> {
   [key: string]: T;
 }
 enum ButtonState { Press, Hold, Release, Up }
-class KeyboardButton {
+class VirtualButton {
   private _state: ButtonState = ButtonState.Up;
   get state(): ButtonState { return this._state; }
   public pressed(): boolean { return this.state === ButtonState.Press; }
-  public down(): boolean { return this.state === ButtonState.Press || this.state === ButtonState.Hold; }
-  public update(up: boolean) {
-    if (up) {
+  public down(): boolean { return this.state === ButtonState.Hold; }
+  public pressOrHold(): boolean { return this.state === ButtonState.Hold || this.state == ButtonState.Press; }
+  public update(pressed: boolean) {
+    if (pressed) {
       if (this._state === ButtonState.Press) {
         this._state = ButtonState.Hold;
       }
@@ -65,20 +76,64 @@ class KeyboardButton {
     }
   }
 }
+class Screen {
+  private _canvas: HTMLCanvasElement = null;
+  get canvas(): HTMLCanvasElement { return this._canvas; }
+  get pixelWidth(): number {
+    return this._canvas.width;
+  }
+  get pixelHeight(): number {
+    return this._canvas.height;
+  }
+  get elementWidth(): number {
+    let rect = this._canvas.getBoundingClientRect();
+    return rect.width;
+  }
+  get elementHeight(): number {
+    let rect = this._canvas.getBoundingClientRect();
+    return rect.height;
+  }
+  public constructor(canvas: HTMLCanvasElement) {
+    this._canvas = canvas;
+  }
+  //void blit.
+
+  //Return the relative XY of the mouse relative to the top left corner of the canvas.
+  public getCanvasRelativeXY(clientX: number, clientY: number): Vector2 {
+    let v2: Vector2 = new Vector2();
+    //getMousePos
+    //https://stackoverflow.com/questions/17130395/real-mouse-position-in-canvas
+    const canvas = renderer.domElement;
+    let rect = canvas.getBoundingClientRect();
+    let scaleX = canvas.width / rect.width;   // relationship bitmap vs. element for X
+    let scaleY = canvas.height / rect.height;  // relationship bitmap vs. element for Y
+    v2.x = (clientX - rect.left) * scaleX;
+    v2.y = (clientY - rect.top) * scaleY;
+    return v2;
+  }
+  //Project canvas point into 3D space
+  //Input is NON-RELATIVE mouse point ( passed in from mousemove event )
+  public project3D(clientX: number, clientY: number, distance: number): Vector3 {
+    let v2: Vector2 = this.getCanvasRelativeXY(clientX, clientY);
+    let f: Frustum = new Frustum();
+    let mouse_pos = f.project(v2.x, v2.y, distance);
+    return mouse_pos;
+  }
+}
 /**
  * Keyboard Input class
  */
 class Keyboard {
-  private _w: KeyboardButton = new KeyboardButton();
-  private _s: KeyboardButton = new KeyboardButton();
-  private _a: KeyboardButton = new KeyboardButton();
-  private _d: KeyboardButton = new KeyboardButton();
-  private _buttons: Array<KeyboardButton> = new Array<KeyboardButton>();
+  private _w: VirtualButton = new VirtualButton();
+  private _s: VirtualButton = new VirtualButton();
+  private _a: VirtualButton = new VirtualButton();
+  private _d: VirtualButton = new VirtualButton();
+  private _buttons: Array<VirtualButton> = new Array<VirtualButton>();
 
-  get w(): KeyboardButton { return this._w; }
-  get s(): KeyboardButton { return this._s; }
-  get a(): KeyboardButton { return this._a; }
-  get d(): KeyboardButton { return this._d; }
+  get w(): VirtualButton { return this._w; }
+  get s(): VirtualButton { return this._s; }
+  get a(): VirtualButton { return this._a; }
+  get d(): VirtualButton { return this._d; }
   get buttons() { return this._buttons; }
 
   constructor() {
@@ -112,16 +167,61 @@ class Keyboard {
 class Mouse extends Vector3 {
   public moved: boolean = false;
   public mousePoint: PointGeo = null;
+  private _rmbDown: boolean = false;
+  private _lmbDown: boolean = false;
+  private _left: VirtualButton = new VirtualButton();
+  private _right: VirtualButton = new VirtualButton();
+
+  get Left(): VirtualButton { return this._left; }
+  get Right(): VirtualButton { return this._right; }
+
   public constructor() {
     super();
     let that = this;
 
+    //Pointler lock doesn't work.  
+    //Browsers are practically useless for first person games.
+    //
+    //let g : any = g_screen.canvas as any;
+    // g.requestPointerLock = g_screen.canvas.requestPointerLock;// || g_screen.canvas.mozRequestPointerLock || g_screen.canvas.webkitRequestPointerLock;
+    // if(g_screen.canvas.requestPointerLock){
+    //   g_screen.canvas.requestPointerLock();
+    // }
+
+    setInterval(function () {
+      that.Left.update(that._lmbDown);
+      that.Right.update(that._rmbDown);
+    });
+    document.addEventListener('mouseup', function (e) {
+      e.preventDefault();
+      if (e.button == 0) {
+        that._lmbDown = false;
+      }
+      else if (e.button == 1) {
+        //middle
+      }
+      else if (e.button == 2) {
+        that._rmbDown = false;
+      }
+    });
     document.addEventListener('mousedown', function (e) {
-      player.shootArms();
+      e.preventDefault();
+      if (e.button == 0) {
+        that._lmbDown = true;
+      }
+      else if (e.button == 1) {
+        //middle
+      }
+      else if (e.button == 2) {
+        that._rmbDown = true;
+      }
+    });
+    document.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
     });
     //var controls = new OrbitControls.default();
     document.addEventListener('mousemove', function (e) {
-
+      e.preventDefault();
 
       //animate arms based on cursor position.
       e.preventDefault();
@@ -129,36 +229,52 @@ class Mouse extends Vector3 {
         that.moved = true;
       }
 
-      //getMousePos
-      //https://stackoverflow.com/questions/17130395/real-mouse-position-in-canvas
-      const canvas = renderer.domElement;
-      let rect = canvas.getBoundingClientRect();
-      let scaleX = canvas.width / rect.width;   // relationship bitmap vs. element for X
-      let scaleY = canvas.height / rect.height;  // relationship bitmap vs. element for Y
-      let rel_x = (e.clientX - rect.left) * scaleX;
-      let rel_y = (e.clientY - rect.top) * scaleY;
+      //Look at the point in the screen projected into 3D
 
       let project_dist: number = 10;//This is how far into the world we project mouse from screen
-      let f: Frustum = new Frustum(camera);
-      let mouse_pos = f.project(rel_x, canvas.width, rel_y, canvas.height, project_dist);
-      that.copy(mouse_pos);
+      let v2 = g_screen.getCanvasRelativeXY(e.clientX, e.clientY);
+      v2.x = (v2.x / g_screen.canvas.width) * 2 - 1;
+      v2.y = ((g_screen.canvas.height - v2.y) / g_screen.canvas.height) * 2 - 1;
 
-      if (Globals.isDebug()) {
-        if (that.mousePoint == null) {
-          that.mousePoint = new PointGeo();
-          g_physics.Scene.add(that.mousePoint);
-        }
-        that.mousePoint.position.set(0, 0, 0);
-        that.mousePoint.rotation.set(0, 0, 0);
-        that.mousePoint.updateMatrix();
-        that.mousePoint.position.set(that.x, that.y, that.z);
-        that.mousePoint.updateMatrix();
-      }
+      let FOV = 0.6;//Increase to get more FOV 
+
+      let base = new Vector4(0, 0, -1, 1);
+      let ry: Matrix4 = new Matrix4();
+      ry.makeRotationAxis(new Vector3(0, -1, 0), Math.PI * FOV * v2.x);
+      let vy: Vector4 = base.clone().applyMatrix4(ry);
+
+      let rx: Matrix4 = new Matrix4();
+      rx.makeRotationAxis(new Vector3(1, 0, 0), Math.PI * FOV * v2.y);
+      let vxy: Vector4 = vy.clone().applyMatrix4(rx);
+
+      let vxy3: Vector3 = new Vector3(vxy.x, vxy.y, vxy.z);
+
+      vxy3.normalize().multiplyScalar(5);
+      vxy3.add(player.WorldPosition);
+      // let f : Frustum = new Frustum(new Vector3(0,0,-1), player.position);
+      //let v3 : Vector3 = f.projectScreen(v2.x,v2.y);
+
+      camera.lookAt(new Vector3(vxy3.x, vxy3.y, vxy3.z));
 
 
-      player.aimArms(that);
+      that.debugDrawMousePos();
 
     }, false);
+  }
+
+  private debugDrawMousePos(): void {
+    let that = this;
+    if (Globals.isDebug()) {
+      if (that.mousePoint == null) {
+        that.mousePoint = new PointGeo();
+        g_physics.Scene.add(that.mousePoint);
+      }
+      that.mousePoint.position.set(0, 0, 0);
+      that.mousePoint.rotation.set(0, 0, 0);
+      that.mousePoint.updateMatrix();
+      that.mousePoint.position.set(that.x, that.y, that.z);
+      that.mousePoint.updateMatrix();
+    }
   }
 }
 /**
@@ -196,16 +312,16 @@ class Input {
           g.MoveController = function () {
             let p: Vector3 = g.position.clone();
             if (g.getHandedness() == "left") {
-              player.aimLeft(p);
+              //player.aimLeft(p);
 
             }
             else if (g.getHandedness() == "right") {
-              player.aimRight(p);
+              // player.aimRight(p);
 
             }
           }
           g.ButtonPress = function (b: VRButton) {
-            player.shootArms();
+            //player.fireBullet();
           }
           g.Joystick = function () {
           }
@@ -233,46 +349,82 @@ class Input {
  * A viewing frustum for a camera.  Quick class to calculate point in screen.
  */
 class Frustum {
-  private Points_fpt_ftl: Vector3;//back topleft
-  private Points_fpt_ftr: Vector3;//back topright
-  private Points_fpt_fbl: Vector3;//back bottomleft
+  private _ftl: Vector3 = new Vector3();
+  private _ftr: Vector3 = new Vector3();
+  private _fbl: Vector3 = new Vector3();
+  private _ntl: Vector3 = new Vector3();
+  private _nbl: Vector3 = new Vector3();
+  private _ntr: Vector3 = new Vector3();
+
+  get ftl(): Vector3 { return this._ftl; }//back topleft
+  get ftr(): Vector3 { return this._ftr; }//back topright
+  get fbl(): Vector3 { return this._fbl; }//back bottomleft
+  get ntl(): Vector3 { return this._ntl; }//near top left
+  get nbl(): Vector3 { return this._nbl; }//near bot left
+  get ntr(): Vector3 { return this._ntr; }//near top right
+
   //private Points_fpt_ntl: Vector3;//back bottomleft
-  public constructor(c: PerspectiveCamera) {
+  public constructor(cam_dir: Vector3 = null, cam_pos: Vector3 = null) {
+    this.construct(cam_dir, cam_pos);
   }
-  public project(screen_x: number, screen_w: number, screen_y: number, screen_h: number, dist: number): Vector3 {
-    //Doing this the old way
-    let cam_dir: Vector3 = new Vector3();
-    camera.getWorldDirection(cam_dir);
+  //Project a point onto the screen in 3D
+  public projectScreen(screen_x: number, screen_y: number) {
+    return this.project(screen_x, screen_y, camera.near);
+  }
+  //Project a point into the screen/canvas, x and y are relative to the top left of the canvas (not the window)
+  //A distance of 
+  public project(screen_x: number, screen_y: number, dist: number): Vector3 {
+
+    let wrx = screen_x / g_screen.elementWidth;//) * 2 - 1;
+    let wry = screen_y / g_screen.elementWidth;//) * 2 + 1;
+
+    let dx = this._ftr.clone().sub(this._ftl).multiplyScalar(wrx);
+    let dy = this._fbl.clone().sub(this._ftl).multiplyScalar(wry);
+
+    let back_plane: Vector3 = this._ftl.clone().add(dx).add(dy);
+
+    let projected: Vector3 = back_plane.clone().sub(player.position).normalize().multiplyScalar(dist);
+
     let cam_pos: Vector3 = new Vector3();
     player.getWorldPosition(cam_pos);
+    projected.add(cam_pos);
 
-    let wrx = screen_x / screen_w;//) * 2 - 1;
-    let wry = screen_y / screen_h;//) * 2 + 1;
+    return projected;
+  }
+  public construct(cam_dir: Vector3 = null, cam_pos: Vector3 = null) {
+    //Doing this the old way
+    if (cam_dir == null) {
+      cam_dir = new Vector3();
+      camera.getWorldDirection(cam_dir);
+    }
+    if (cam_pos == null) {
+      cam_pos = new Vector3();
+      player.getWorldPosition(cam_pos);
+    }
+
+    let nearCenter: Vector3 = cam_pos.clone().add(cam_dir.clone().multiplyScalar(camera.near));
     let farCenter: Vector3 = cam_pos.clone().add(cam_dir.clone().multiplyScalar(camera.far));
-    let ar = screen_h / screen_w;
+    let ar = g_screen.elementHeight / g_screen.elementWidth;
     let tan_fov_2 = Math.tan(THREE.Math.degToRad(camera.getEffectiveFOV()) / 2.0);
-    let w_far_2 = tan_fov_2 * camera.far;
-    let h_far_2 = w_far_2 * ar;
     let rightVec = camera.up.clone().cross(cam_dir);
 
-    let cup = camera.up.clone().multiplyScalar(h_far_2);
-    let crt = rightVec.clone().multiplyScalar(w_far_2);
+    let w_far_2 = tan_fov_2 * camera.far;
+    let h_far_2 = w_far_2 * ar;
+    let cup_far = camera.up.clone().multiplyScalar(h_far_2);
+    let crt_far = rightVec.clone().multiplyScalar(w_far_2);
+    this._ftl = farCenter.clone().add(cup_far).sub(crt_far);
+    this._ftr = farCenter.clone().add(cup_far).add(crt_far);
+    this._fbl = farCenter.clone().sub(cup_far).sub(crt_far);
 
-    this.Points_fpt_ftl = farCenter.clone().add(cup).sub(crt);
-    this.Points_fpt_ftr = farCenter.clone().add(cup).add(crt);
-    this.Points_fpt_fbl = farCenter.clone().sub(cup).sub(crt);
-
-    let dx = this.Points_fpt_ftr.clone().sub(this.Points_fpt_ftl).multiplyScalar(wrx);
-    let dy = this.Points_fpt_fbl.clone().sub(this.Points_fpt_ftl).multiplyScalar(wry);
-
-    let mouse_pos_3d: Vector3 = this.Points_fpt_ftl.clone().add(dx).add(dy);
-
-    mouse_pos_3d.normalize().multiplyScalar(dist);
-
-    mouse_pos_3d.add(cam_pos);
-
-    return mouse_pos_3d;
+    let w_near_2 = tan_fov_2 * camera.near;
+    let h_near_2 = w_near_2 * ar;
+    let cup_near = camera.up.clone().multiplyScalar(h_near_2);
+    let crt_near = rightVec.clone().multiplyScalar(w_near_2);
+    this._ntl = nearCenter.clone().add(cup_near).sub(crt_near);
+    this._ntr = nearCenter.clone().add(cup_near).add(crt_near);
+    this._nbl = nearCenter.clone().sub(cup_near).sub(crt_near);
   }
+
 }
 enum TimerState { Stopped, Running }
 class Timer {
@@ -307,6 +459,7 @@ class Timer {
     }
   }
 }
+
 class PointGeo extends THREE.Object3D {
   public constructor() {
     super();
@@ -320,12 +473,27 @@ class PointGeo extends THREE.Object3D {
 }
 class PhysicsManager {
   private _objects: Array<PhysicsObject> = new Array<PhysicsObject>();
+  private _collide: Array<PhysicsObject> = new Array<PhysicsObject>();
+
   public get Objects(): Array<PhysicsObject> { return this._objects; }
   private toDestroy: Array<PhysicsObject> = new Array<PhysicsObject>();
 
   public Scene: THREE.Scene = null; //= new THREE.Scene();
 
-
+  public addOrRemoveCollider(ob: PhysicsObject) {
+    if (ob.Collide != null) {
+      for (let i = this._collide.length - 1; i >= 0; --i) {
+        if (this._collide[i] == ob) {
+          Globals.logError("Tried to add duplicate collider.");
+          return;
+        }
+      }
+      this._collide.push(ob);
+    }
+    else {
+      this.removeCollider(ob);
+    }
+  }
   public add(obj: PhysicsObject) {
     for (let i = this._objects.length - 1; i >= 0; --i) {
       if (this._objects[i] == obj) {
@@ -334,6 +502,9 @@ class PhysicsManager {
       }
     }
     this._objects.push(obj);
+    if (obj.Collide) {
+      this._objects.push(obj);
+    }
     this.Scene.add(obj);
   }
   public destroy(obj: PhysicsObject) {
@@ -341,14 +512,22 @@ class PhysicsManager {
     this.toDestroy.push(obj);
     obj.IsDestroyed = true;
   }
-
+  private removeCollider(ob: PhysicsObject) {
+    if (ob.Collide) {
+      for (let j = this._collide.length - 1; j >= 0; --j) {
+        if (this._collide[j] == ob) {
+          this._collide.splice(j, 1);//delete
+        }
+      }
+    }
+  }
   public update(dt: number): void {
     //Preliminary destroy . distance
     for (let i = this._objects.length - 1; i >= 0; --i) {
       let ob = this._objects[i];
-      let ca : boolean = ob.OutOfWorld === OutOfWorldResponse.Destroy && ob.WorldPosition.z > 300;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
-      let cb : boolean = ob.position.z - player.position.z > 5;
-      if (ca||cb) {
+
+      if (ob.Destroy()) {
+        //Objects must have a destroy function defined.
         this.destroy(ob);
       }
       else {
@@ -357,11 +536,11 @@ class PhysicsManager {
     }
 
     //Collide with others
-    for (let i = this._objects.length - 1; i >= 0; --i) {
-      for (let j = this._objects.length - 1; j >= 0; --j) {
+    for (let i = this._collide.length - 1; i >= 0; --i) {
+      for (let j = this._collide.length - 1; j >= 0; --j) {
         if (j != i) {
-          let a = this._objects[i];
-          let b = this._objects[j];
+          let a = this._collide[i];
+          let b = this._collide[j];
           if (a.IsDestroyed == false && b.IsDestroyed == false) {
             if (a.Box.intersectsBox(b.Box)) {
               if (a.Collide) {
@@ -372,77 +551,154 @@ class PhysicsManager {
               }
             }
           }
-
         }
       }
     }
 
     //Remove destroyed.
     for (let i = this.toDestroy.length - 1; i >= 0; --i) {
-      if (this.toDestroy[i].IsDestroyed) {
+      let ob = this.toDestroy[i];
+      if (ob.IsDestroyed) {
+
         for (let j = this._objects.length - 1; j >= 0; --j) {
-          if (this._objects[j] == this.toDestroy[i]) {
+          if (this._objects[j] == ob) {
             this._objects.splice(j, 1);//delete
           }
         }
+        this.removeCollider(ob);
+
       }
     }
     this.toDestroy = new Array<PhysicsObject>();
 
   }
 }
-enum OutOfWorldResponse { Destroy, None }
 class PhysicsObject extends THREE.Object3D {
-  protected _bbox = new THREE.Box3();
-  get Box(): Box3 { return this._bbox; }
+  // protected _bbox = new THREE.Box3();
   private _velocity: Vector3 = new Vector3();
   private _isDestroyed: boolean = false;
-  private _rotation: Vector3 = new Vector3;
+  private _rotation: Vector3 = new Vector3();
+  private _scale: Vector3 = new Vector3();
+  protected _model: THREE.Object3D = null;
+  private _boxHelper: THREE.BoxHelper = null;
 
-  private _model: THREE.Object3D = null;
-  public setModel(m: THREE.Object3D) {
-    if (this._model) {
-      this.remove(this._model);
-    }
-    this._bbox = new THREE.Box3().setFromObject(m);
+  private _destroy : any = function() { 
+    //Destroy if we are too far awawy from the player.
+    let ca: boolean = Math.abs(this.WorldPosition.z - player.WorldPosition.z) > 500;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
+    //Destroy if we are behind the player (we only move forward in the z)
+    let cb: boolean = this.position.z - player.position.z > 10;
+    //Destroy if our scale is zero
+    let cc: boolean = (this.scale.x < 0.0001) && (this.scale.y < 0.0001) && (this.scale.z < 0.0001);
+    return ca || cb || cc;
+  }
+  get Destroy() : any { return this._destroy; }
+  set Destroy(v:any) { this._destroy = v;}
 
-    this._model = m;
-    this.add(this._model);
+  //Setting Collide will add or remove the object from the game's collider list
+  private _collide: any = null;
+  get Collide(): any { return this._collide; }
+  set Collide(f: any) {
+    this._collide = f;
+    g_physics.addOrRemoveCollider(this);
   }
 
-  public OutOfWorld: OutOfWorldResponse = OutOfWorldResponse.Destroy;
-  public Collide: any = null;
-
+  get Box(): Box3 {
+    return new THREE.Box3().setFromObject(this);
+  }
   get IsDestroyed(): boolean { return this._isDestroyed; }
   set IsDestroyed(b: boolean) { this._isDestroyed = b; }
-
   get Velocity(): Vector3 { return this._velocity; }
   set Velocity(val: Vector3) { this._velocity = val; }
-  get Rotation(): Vector3 { return this._rotation; }
-  set Rotation(val: Vector3) { this._rotation = val; }
+  get RotationDelta(): Vector3 { return this._rotation; }
+  set RotationDelta(val: Vector3) { this._rotation = val; }
+  get ScaleDelta(): Vector3 { return this._scale; }
+  set ScaleDelta(val: Vector3) { this._scale = val; }
 
+  set Opacity(val: number) {
+    if (this._model !== null) {
+      let mod: THREE.Mesh = this._model as THREE.Mesh;
+      if (mod) {
+        if (mod.material) {
+          let mat: THREE.Material = mod.material as THREE.Material;
+          if (mat) {
+            if (mat.transparent === false) {
+              mat.transparent = true;
+            }
+            mat.opacity = val;
+          }
+        }
+      }
+    }
+  }
+  set Color(val: Vector3) {
+    if (this._model !== null) {
+      let mod: THREE.Mesh = this._model as THREE.Mesh;
+      if (mod) {
+        if (mod.material) {
+          let mat: THREE.MeshBasicMaterial = mod.material as THREE.MeshBasicMaterial;
+          if (mat) {
+            mat.color.setRGB(val.x,val.y,val.z);
+          }
+        }
+      }
+    }
+  }
+  public constructor() {
+    super();
+    g_physics.add(this);
+  }
+  public destroy() {
+    g_physics.destroy(this);
+  }
+  public update(dt: number) {
+    this.position.add(this.Velocity.clone().multiplyScalar(dt));
+    let rdt = this.RotationDelta.clone().multiplyScalar(dt);
+    this.rotation.x = (this.rotation.x + rdt.x) % Math.PI;
+    this.rotation.y = (this.rotation.y + rdt.y) % Math.PI;
+    this.rotation.z = (this.rotation.z + rdt.z) % Math.PI;
+    this.scale.x += this._scale.x * dt;
+    if(this.scale.x < 0 ){ this.scale.x = 0;}
+    this.scale.y += this._scale.y * dt;
+    if(this.scale.y < 0 ){ this.scale.y = 0;}
+    this.scale.z += this._scale.z * dt;
+    if(this.scale.z < 0 ){ this.scale.z = 0;}
+
+    // if (this._bbox) {
+    //   this._bbox.translate(this.position);
+    // }
+  }
   public get WorldPosition(): Vector3 {
     let v = new Vector3();
     this.getWorldPosition(v);
     return v;
   }
+  public setModel(m: THREE.Object3D) {
+    if (this._model) {
+      this.remove(this._model);
+    }
+    if (this._boxHelper) {
+      this.remove(this._boxHelper);
+    }
+    this._model = null;
+    this._boxHelper = null;
+    if (m !== null) {
 
-  public constructor() {
-    super();
-    g_physics.add(this);
+      // this._bbox = new THREE.Box3().setFromObject(m);
+      this._model = m;
+      this.add(this._model);
+
+      if (Globals.isDebug()) {
+        this._boxHelper = new THREE.BoxHelper(this._model, new THREE.Color(0xffff00));
+        this.add(this._boxHelper);
+      }
+    }
   }
 
-  public update(dt: number) {
-    this.position.add(this.Velocity.clone().multiplyScalar(dt));
-    let rdt = this.Rotation.clone().multiplyScalar(dt);
-    this.rotation.x = (this.rotation.x + rdt.x) % Math.PI;
-    this.rotation.y = (this.rotation.y + rdt.y) % Math.PI
-    this.rotation.z = (this.rotation.z + rdt.z) % Math.PI
-  }
 }
 //Ship class representing both player and enemy ship.
 enum Direction { Left, Right, None }
 class Ship extends PhysicsObject {
+  protected _health: number = 100;
 
   private _movedLeft: boolean = false;
   private _movedRight: boolean = false;
@@ -452,8 +708,8 @@ class Ship extends PhysicsObject {
   private _pitchspd: number = Math.PI * 0.25;
   private _maxpitch: number = Math.PI * 0.15;
 
-  private _strafeSpeed: number = 4;
-  private _liftSpeed: number = 4;
+  private _strafeSpeed: number = 12;
+  private _liftSpeed: number = 12;
 
   private _roll: number = 0;
   private _rollspd: number = Math.PI * 0.25;
@@ -545,15 +801,18 @@ class Ship extends PhysicsObject {
     return 0;
   }
   private smooth_bank(l_or_u: boolean, r_or_d: boolean, roll_or_pitch: { ref: number }, startPress: number, startRelease: number, add: number, maxval: number): number {
+    let ret: number = 0;
     if (l_or_u) {
-      return this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, 1);
+      ret = this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, 1);
     }
     else if (r_or_d) {
-      return this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, -1);
+      ret = this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, -1);
     }
     else {
-      return this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, 0);
+      ret = this.interp_bank(roll_or_pitch, startPress, startRelease, add, maxval, 0);
     }
+
+    return ret;
   }
   public update(dt: number) {
     super.update(dt);
@@ -570,7 +829,9 @@ class Ship extends PhysicsObject {
     // }
     // else {
     //Smoothly interpolate.
-    roll = this.smooth_bank(this._movedLeft, this._movedRight, { ref: this._roll }, this._rollPress, this._rollRelease, this._rollspd * dt, this._maxroll);
+    let obj = { ref: this._roll };
+    roll = this.smooth_bank(this._movedLeft, this._movedRight, obj, this._rollPress, this._rollRelease, this._rollspd * dt, this._maxroll);
+    this._roll = obj.ref;
     //}
 
 
@@ -601,88 +862,124 @@ class Ship extends PhysicsObject {
     // this.matrix.copy(mtrs);
 
 
-    // this.rotation.x = pitch;
-  // this.rotation.z = roll;
+    this.rotation.x = pitch;
+    this.rotation.z = roll;
 
     //reset movement
     this._movedDown = this._movedLeft = this._movedRight = this._movedUp = false;
   }
 }
-class PlayerShip extends Ship {
-  private _arms: Array<Arm> = new Array<Arm>();
-  public shootArms(): void {
-    let n = new THREE.Vector3();
-     player.getWorldDirection(n);
-    n.negate();
-    let b1 : Bullet = new Bullet(n);
-    b1.position.copy(player.position.clone().sub(new THREE.Vector3(0.4,0,0)));
-    
-    let b2 : Bullet = new Bullet(n);
-    b2.position.copy(player.position.clone().add(new THREE.Vector3(0.4,0,0)));
+class WaitTimer {
+  private _time: number = 2;
+  private _maxtime: number = 2;
+  get time(): number { return this._time; }
+  get time01(): number { return 1 - this._time / this._maxtime; }
 
-    
-    // for (let i: number = 0; i < this._arms.length; i++) {
-    //   if (this._arms[i]) {
-    //     this._arms[i].shoot();
-    //   }
-    // }
-
-    g_audio.play(Files.Audio.Shoot);
+  public constructor(maxtime: number) {
+    this._maxtime = this._time = maxtime;
   }
-  public constructor() {
-    super();
-
-    // let a1: Arm = new Arm();
-    // a1.Pos.set(-0.5, -0.0, -0);//This is our cached positio POST rotation
-    // a1.up = new Vector3(0, 0, 1);// This is important for LookAt
-    // this.add(a1);
-    // this._arms.push(a1);
-
-    // let a2: Arm = new Arm();
-    // a2.Pos.set(0.5, -0.0, -0);//This is our cached positio POST rotation
-    // a2.up = new Vector3(0, 0, 1);// This is important for LookAt
-    // this.add(a2);
-    // this._arms.push(a2);
-  }
-
-  public aimArms(mouse: Mouse): void {
-    for (let i: number = 0; i < this._arms.length; i++) {
-      if (this._arms[i]) {
-        //   this._arms[i].aim(mouse);
+  public update(dt: number): void {
+    if (this._time > 0) {
+      this._time -= dt;
+      if (this._time <= 0) {
+        this._time = 0;
       }
     }
   }
-  public aimLeft(p: Vector3) {
-    if (this._arms.length > 0 && this._arms[0]) {
-      this._arms[0].aim(p);
-    }
+  public ready() {
+    return this._time <= 0;
   }
-  public aimRight(p: Vector3) {
-    if (this._arms.length > 1 && this._arms[1]) {
-      this._arms[1].aim(p);
-    }
+  public reset() {
+    this._time = this._maxtime;
+  }
+}
+class PlayerShip extends Ship {
+  // private _arms: Array<Arm> = new Array<Arm>();
+  public bombs: number = 3;
+  public score: number = 0;
+  public bombTimer: WaitTimer = new WaitTimer(3);
+  public bulletTimer: WaitTimer = new WaitTimer(0.2);
+  public gun1pos: THREE.Object3D = null;
+  public gun2pos: THREE.Object3D = null;
+  public constructor() {
+    super();
   }
   public update(dt: number) {
+    this.bombTimer.update(dt);
+    this.bulletTimer.update(dt);
 
     if (g_input.keyboard) {
       if (g_input.keyboard.a.down()) {
-        player.moveLeft(dt);
+        this.moveLeft(dt);
       }
       if (g_input.keyboard.d.down()) {
-        player.moveRight(dt);
+        this.moveRight(dt);
       }
       if (g_input.keyboard.w.down()) {
-        player.moveUp(dt);
+        this.moveUp(dt);
       }
       if (g_input.keyboard.s.down()) {
-        player.moveDown(dt);
+        this.moveDown(dt);
       }
+    }
+
+    if (g_input.mouse.Right.pressed()) {
+      this.tryFireBomb();
+    }
+    if (g_input.mouse.Left.pressOrHold()) {
+      this.tryFireBullet();
     }
 
     super.update(dt);
   }
+  private tryFireBullet(): void {
+    if (this.bulletTimer.ready()) {
+      let n = new THREE.Vector3();
+      camera.getWorldDirection(n);
+      //n.negate();
+
+
+      let v: THREE.Vector3 = new THREE.Vector3();
+
+      player.gun1pos.getWorldPosition(v);
+      let b1: Bullet = new Bullet(n);
+      b1.position.copy(v);
+
+      player.gun2pos.getWorldPosition(v);
+      let b2: Bullet = new Bullet(n);
+      b2.position.copy(v);
+
+      g_audio.play(Files.Audio.Shoot);
+      this.bulletTimer.reset();
+    }
+  }
+  private tryFireBomb(): void {
+    if (this.bombs > 0) {
+      if (this.bombTimer.ready()) {
+        let n = new THREE.Vector3();
+        camera.getWorldDirection(n);
+
+        let b1: Bomb = new Bomb(n);
+
+        //shoot from gun1, why not?
+        let v: THREE.Vector3 = new THREE.Vector3();
+        player.gun1pos.getWorldPosition(v);
+        b1.position.copy(v);
+
+        g_audio.play(Files.Audio.Bomb_Shoot);
+        this.bombs -= 1;
+      }
+
+      this.bombTimer.reset();
+    }
+    else {
+      g_audio.play(Files.Audio.Nope);
+
+    }
+  }
 }
 class EnemyShip extends Ship {
+
   public constructor(model: THREE.Object3D) {
     super();
     if (model) {
@@ -693,6 +990,29 @@ class EnemyShip extends Ship {
       Globals.logError("Error loading enemy ship model. Default model created.");
       this.setModel(this.createDefaultGeo());
     }
+
+    this.Collide = function (b: PhysicsObject) {
+      if (b instanceof Bullet) {
+        this._health -= 20;
+        g_audio.play(Files.Audio.Ship_Hit);
+        g_physics.destroy(b);
+        g_particles.createShipHitParticles(this.WorldPosition);
+      }
+      if (b instanceof BombExplosion) {
+        this._health = 0;
+      }
+      if (b instanceof Bomb) {
+      }
+
+      if (this._health <= 0) {
+        this._health = 0;
+        g_particles.createShipDieParticles(this.WorldPosition);
+        g_audio.play(Files.Audio.Ship_Explode);
+        this.destroy();
+        player.score += 1;
+      }
+    };
+
   }
   private createDefaultGeo(): THREE.Mesh {
     var geo = new THREE.BoxBufferGeometry(.3, .03, .2);
@@ -712,133 +1032,171 @@ class EnemyShip extends Ship {
   }
 
 }
-class Bullet extends PhysicsObject {
+class Projectile extends PhysicsObject {
   private _speed: number = 40;//.4;
 
-  public constructor(direction : Vector3) {
+  public constructor(spd: number, direction: Vector3, model: Files.Model) {
     super();
-    let b = g_models.getModel(Files.Model.Bullet);
-    let b2 = b.clone();
+    
+    this.Collide = function () { }//Force object to collide
+    
+    this._speed = spd;
+    let b = g_models.getModel(model);
+    if (b != null) {
+      let b2 = b.clone();
+      this.setModel(b2);
 
-    this.setModel(b2);
-    // //Arm.  TODO: later we load this in
-    // var geo = new THREE.BoxBufferGeometry(.2, .2, .4);
-    // var mat = new THREE.MeshBasicMaterial({
-    //   //map: this._texture,
-    //   transparent: false,
-    //   side: THREE.DoubleSide,
-    //   color: 0x3FC073,
-    // });
-    // geo.computeBoundingBox();
-    // let mesh: THREE.Mesh = new THREE.Mesh(geo, mat);
-    // this.add(mesh);
-
-    // let p: Vector3 = v3;//arm.AimNormal;// new Vector3();
-    // //arm.getWorldDirection(p);
-     this.Velocity.copy(direction.multiplyScalar(this._speed));
-
-    // //arm.getWorldPosition(p);
-    // //this.position.copy(p);
-
-
-
-    // this.rotate.set(arm.rotation.x, arm.rotation.y, arm.rotation.z);
-  }
-
-}
-class Arm extends THREE.Object3D {
-  private _points: THREE.Points = null;
-  private _armMesh: THREE.Mesh = null;
-  public Pos: Vector3 = new Vector3();
-
-  private _aimpoint: Vector3 = new Vector3();
-  get AimPoint(): Vector3 { return this._aimpoint; }
-  private _aimnormal: Vector3 = new Vector3();
-  get AimNormal(): Vector3 { return this._aimnormal; }
-  public constructor() {
-    super();
-    this.createMeshes();
-  }
-  public getP0(): Vector3 {
-    return this.getPoint(0);
-  }
-  public getP1(): Vector3 {
-    return this.getPoint(1);
-  }
-  public shoot() {
-   // let b: Bullet = new Bullet(this);
-  }
-  public aim(at: Vector3) {
-    this._aimpoint = at;
-    //Attempt to rotate FIRST then trnaslate
-    this.position.set(0, 0, 0);
-    this.rotation.set(0, 0, 0);
-    this.updateMatrix();
-    this.position.set(this.Pos.x, this.Pos.y, this.Pos.z);
-    this.updateMatrix();
-
-    let wp = new Vector3();
-    this.getWorldPosition(wp);
-
-    let world_pt = wp;//wp.clone().add(this.getP0());
-
-    this._aimnormal = at.clone().sub(world_pt);
-    this._aimnormal.normalize();
-    var left = this._aimnormal.clone().cross(this.up).normalize();
-
-    var amt = Math.acos(this.up.dot(this._aimnormal));
-
-    this.rotateOnAxis(left, amt);
-  }
-  private getPoint(idx: number): Vector3 {
-    if (idx <= 1) {
-      if (this._points) {
-        if (this._points.geometry) {
-          let g: THREE.Geometry = this._points.geometry as THREE.Geometry;
-          if (g && g.vertices && g.vertices.length >= 2) {
-            return g.vertices[idx];
-          }
-        }
-      }
+      this.lookAt( this.position.clone().add(direction));
     }
-    return null;
-  }
-  private createMeshes(): void {
-    var xy = 0.02;
-    var z = 1.7;
-    //create Arms
-
-    //https://threejs.org/examples/?q=points#webgl_custom_attributes_points
-    // Contact points for the mesh.
-    let p0: Vector3 = new Vector3(0, 0, -z / 2);
-    let p1: Vector3 = new Vector3(0, 0, z / 2);
-    let points_geo: THREE.Geometry = new THREE.Geometry();
-    points_geo.vertices.push(p0);
-    points_geo.vertices.push(p1);
-    var pointMaterial = new THREE.PointsMaterial({ color: 0xFF0000, size: 0.1 });
-    this._points = new THREE.Points(points_geo, pointMaterial);
-    this
-    this.add(this._points);
-
-    //Arm.  TODO: later we load this in
-    var arm_geo = new THREE.BoxBufferGeometry(xy, xy, z);
-    arm_geo.computeBoundingBox(); // for hit area
-    var arm_mat = new THREE.MeshBasicMaterial({
-      //map: this._texture,
-      transparent: false,
-      side: THREE.DoubleSide,
-      color: 0xF0FFF0,
-    });
-    this._armMesh = new THREE.Mesh(arm_geo, arm_mat);
-    this.add(this._armMesh);
-
-    //move pivots
-    //   this._armMesh.translateZ(z / 2);
-    //   this._points.translateZ(z / 2);
-
-    this._points.visible = Globals.isDebug();//Not sure if this will actually stop update the points.
+    else {
+      Globals.logError("Could not find model" + model);
+    }
+    this.Velocity.copy(direction.clone().multiplyScalar(this._speed));
   }
 }
+class Bullet extends Projectile {
+  public constructor(direction: Vector3) {
+    super(90, direction, Files.Model.Bullet);
+  }
+
+}
+class Bomb extends Projectile {
+  private _boomtimer: WaitTimer = new WaitTimer(2.5);
+
+  public constructor(direction: Vector3) {
+    super(55, direction, Files.Model.Bomb);
+    this.RotationDelta.x = Math.PI;
+    this.rotation.z = Math.PI;
+
+  }
+  public update(dt: number) {
+    super.update(dt);
+    this._boomtimer.update(dt);
+    if (this._boomtimer.ready()) {
+      g_audio.play(Files.Audio.Bomb);
+      let exp: BombExplosion = new BombExplosion(this.position);
+
+      this.destroy();
+    }
+  }
+}
+class BombExplosion extends Projectile {
+  private _dietimer: WaitTimer = new WaitTimer(1.1);
+
+  public constructor(dposition: Vector3) {
+    super(0, new Vector3(0, 1, 0), Files.Model.Bomb_Explosion);
+    this.position.copy(dposition);
+  }
+  public update(dt: number) {
+    super.update(dt);
+    this._dietimer.update(dt);
+
+    let scale: number = 150;
+
+    this.scale.x = 0.01 + this._dietimer.time01 * scale;
+    this.scale.y = 0.01 + this._dietimer.time01 * scale;
+    this.scale.z = 0.01 + this._dietimer.time01 * scale;
+    this.rotation.y = this._dietimer.time01 * (Math.PI * 4.9378);
+    this.Opacity = 1 - this._dietimer.time01;
+
+    if (this._dietimer.ready()) {
+      this.destroy();
+    }
+  }
+}
+// class Arm extends THREE.Object3D {
+//   private _points: THREE.Points = null;
+//   private _armMesh: THREE.Mesh = null;
+//   public Pos: Vector3 = new Vector3();
+
+//   private _aimpoint: Vector3 = new Vector3();
+//   get AimPoint(): Vector3 { return this._aimpoint; }
+//   private _aimnormal: Vector3 = new Vector3();
+//   get AimNormal(): Vector3 { return this._aimnormal; }
+//   public constructor() {
+//     super();
+//     this.createMeshes();
+//   }
+//   public getP0(): Vector3 {
+//     return this.getPoint(0);
+//   }
+//   public getP1(): Vector3 {
+//     return this.getPoint(1);
+//   }
+//   public shoot() {
+//     // let b: Bullet = new Bullet(this);
+//   }
+//   public aim(at: Vector3) {
+//     this._aimpoint = at;
+//     //Attempt to rotate FIRST then trnaslate
+//     this.position.set(0, 0, 0);
+//     this.rotation.set(0, 0, 0);
+//     this.updateMatrix();
+//     this.position.set(this.Pos.x, this.Pos.y, this.Pos.z);
+//     this.updateMatrix();
+
+//     let wp = new Vector3();
+//     this.getWorldPosition(wp);
+
+//     let world_pt = wp;//wp.clone().add(this.getP0());
+
+//     this._aimnormal = at.clone().sub(world_pt);
+//     this._aimnormal.normalize();
+//     var left = this._aimnormal.clone().cross(this.up).normalize();
+
+//     var amt = Math.acos(this.up.dot(this._aimnormal));
+
+//     this.rotateOnAxis(left, amt);
+//   }
+//   private getPoint(idx: number): Vector3 {
+//     if (idx <= 1) {
+//       if (this._points) {
+//         if (this._points.geometry) {
+//           let g: THREE.Geometry = this._points.geometry as THREE.Geometry;
+//           if (g && g.vertices && g.vertices.length >= 2) {
+//             return g.vertices[idx];
+//           }
+//         }
+//       }
+//     }
+//     return null;
+//   }
+//   private createMeshes(): void {
+//     var xy = 0.02;
+//     var z = 1.7;
+//     //create Arms
+
+//     //https://threejs.org/examples/?q=points#webgl_custom_attributes_points
+//     // Contact points for the mesh.
+//     let p0: Vector3 = new Vector3(0, 0, -z / 2);
+//     let p1: Vector3 = new Vector3(0, 0, z / 2);
+//     let points_geo: THREE.Geometry = new THREE.Geometry();
+//     points_geo.vertices.push(p0);
+//     points_geo.vertices.push(p1);
+//     var pointMaterial = new THREE.PointsMaterial({ color: 0xFF0000, size: 0.1 });
+//     this._points = new THREE.Points(points_geo, pointMaterial);
+//     this
+//     this.add(this._points);
+
+//     //Arm.  TODO: later we load this in
+//     var arm_geo = new THREE.BoxBufferGeometry(xy, xy, z);
+//     arm_geo.computeBoundingBox(); // for hit area
+//     var arm_mat = new THREE.MeshBasicMaterial({
+//       //map: this._texture,
+//       transparent: false,
+//       side: THREE.DoubleSide,
+//       color: 0xF0FFF0,
+//     });
+//     this._armMesh = new THREE.Mesh(arm_geo, arm_mat);
+//     this.add(this._armMesh);
+
+//     //move pivots
+//     //   this._armMesh.translateZ(z / 2);
+//     //   this._points.translateZ(z / 2);
+
+//     this._points.visible = Globals.isDebug();//Not sure if this will actually stop update the points.
+//   }
+// }
 class Random {
   // private static _random: Mersenne = new Mersenne();
   public static float(min: number, max: number) {
@@ -846,6 +1204,14 @@ class Random {
     let n = Math.random();
     let n2 = min + (max - min) * n;
     return n2;
+  }
+  public static randomNormal(): Vector3 {
+    let v: Vector3 = new Vector3();
+    v.x = Random.float(-1, 1);
+    v.y = Random.float(-1, 1);
+    v.z = Random.float(-1, 1);
+    v.normalize();
+    return v;
   }
   public static bool() {
     //return this._random.random_incl() > 0.5;
@@ -941,11 +1307,19 @@ class ModelManager {
   }
   private loadModels(): void {
     let that = this;
-    this.loadModel(Files.Model.Player_Ship, ['Player_Ship', 'Player_Seat'], function (success: boolean, objs: any, gltf: any) {
+    this.loadModel(Files.Model.Player_Ship, ['Player_Ship', 'Player_Seat', 'Gun1', 'Gun2'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
         let player_ship: THREE.Object3D = objs['Player_Ship'];
         player_ship.scale.set(.6, .6, .6);
         player.setModel(player_ship);
+        player.gun1pos = new THREE.Object3D();
+        player.gun1pos.position.copy(objs['Gun1'].position);
+        player_ship.add(player.gun1pos);
+
+        player.gun2pos = new THREE.Object3D();
+        player.gun2pos.position.copy(objs['Gun2'].position);
+        player_ship.add(player.gun2pos);
+
         let player_pos = objs['Player_Seat'].position;
         user.position.copy(player_pos);
         return player_ship;
@@ -960,22 +1334,60 @@ class ModelManager {
       }
       return null;
     });
+    this.loadModel(Files.Model.Enemy_Ship2, ['Enemy_Ship2'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let enemy_ship: THREE.Object3D = objs['Enemy_Ship2'];
+        enemy_ship.scale.set(.6, .6, .6);
+        return enemy_ship;
+      }
+      return null;
+    });
     this.loadModel(Files.Model.Bullet, ['Bullet'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
         let a: THREE.Object3D = objs['Bullet'];
         a.scale.set(.6, .6, .6);
-        let b =a as THREE.Mesh;
-        if(b){
+        let b = a as THREE.Mesh;
+        if (b) {
           let m = b.material as THREE.Material;
-          if(m){
+          if (m) {
             m.flatShading = true;
           }
         }
-
         return a;
       }
       return null;
-    });    
+    });
+    this.loadModel(Files.Model.Bomb, ['Bomb'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let a: THREE.Object3D = objs['Bomb'];
+        a.scale.set(.6, .6, .6);
+        let b = a as THREE.Mesh;
+        if (b) {
+          let m = b.material as THREE.Material;
+          if (m) {
+            m.flatShading = true;
+          }
+        }
+        return a;
+      }
+      return null;
+    });
+    this.loadModel(Files.Model.Bomb_Explosion, ['Bomb_Explosion'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let a: THREE.Object3D = objs['Bomb_Explosion'];
+        a.scale.set(.6, .6, .6);
+        let b = a as THREE.Mesh;
+        if (b) {
+          let m = b.material as THREE.Material;
+          if (m) {
+            m.flatShading = true;
+          }
+        }
+        return a;
+      }
+      return null;
+    });
+
   }
   private loadModel(filename: string, obj_names_in_scene: Array<string>, afterLoad: any) {
     let that = this;
@@ -998,7 +1410,6 @@ class ModelManager {
             arrobjs[sz] = obj;
           }
         }
-
         if (afterLoad) {
           let obj = afterLoad(success, arrobjs, gltf);
           if (obj == null) {
@@ -1017,12 +1428,109 @@ class ModelManager {
       }
     );
   }
+}
+class IAFloat { 
+  public Min : Number =0;
+  public Max : Number = 1;
+  public constructor(min: number, max : number){
+    this.Min = min;
+    this.Max = max;
+  }
+}
+class IAVec3 { 
+  public Min : Vector3 = new Vector3(0,0,0);
+  public Max : Vector3 = new Vector3(1,1,1);
+  public constructor(min: Vector3, max : Vector3){
+    this.Min = min;
+    this.Max = max;
+  }
+  public calc() : Vector3 {
+    let r : Vector3 = new Vector3();
+    r.x = Random.float(this.Min.x,this.Max.x);
+    r.y = Random.float(this.Min.y,this.Max.y);
+    r.z = Random.float(this.Min.z,this.Max.z);
+    return r;
+  }
+}
+class ParticleParams {
+  public Count: number = 10;
+  public Speed: number = 70; //m/s
+  public Position: Vector3 = new Vector3();
+  public Scale: Vector3 = new Vector3(0, 0, 0);
+  public InitialScale : IAVec3 = new IAVec3(new Vector3(1,1,1), new Vector3(1,1,1));
+  public Rotation: Vector3 = new Vector3(0, 0, 0);
+  public Color: IAVec3 = new IAVec3(new Vector3(0,0,0), new Vector3(1,1,1));
+}
+class Particle extends PhysicsObject {
+  public constructor(m: THREE.Mesh) {
+    super();
+    let b2 = m.clone();
+    this.setModel(b2);
+  }
+}
+class Particles {
+ // private _particles: Array<Particle> = new Array<Particle>();
+  private _mesh: THREE.Mesh = null;
 
+  public constructor() {
+    var geo = new THREE.BoxBufferGeometry(1, 1, 1);
+    geo.computeBoundingBox(); // for hit area
+    var mat = new THREE.MeshBasicMaterial({
+      //map: this._texture,
+      transparent: false,
+      side: THREE.FrontSide,
+      color: 0xFFFFFF,
+    });
+    geo.computeBoundingBox();
+
+    this._mesh = new THREE.Mesh(geo, mat);
+  }
+  public create(params: ParticleParams) {
+    for (let i = 0; i < params.Count; ++i) {
+      let p = new Particle(this._mesh);
+      p.Velocity = Random.randomNormal().multiplyScalar(params.Speed);
+      p.RotationDelta.copy(params.Rotation);
+      p.ScaleDelta.copy(params.Scale);
+      p.position.copy(params.Position);
+      p.Color = params.Color.calc();
+      p.scale.copy(params.InitialScale.calc());
+    }
+  }
+  public createShipDieParticles(pos: Vector3) {
+    let params: ParticleParams = new ParticleParams();
+    params.Count = 20;
+    params.Position.copy(pos);
+    params.Rotation.x = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
+    params.Speed = Random.float(40, 100);
+    params.Color.Min.set(0.7, 0.7, 0);
+    params.Color.Max.set(1,1,0);
+    this.create(params);
+  }
+  public createShipHitParticles(pos: Vector3) {
+    let params: ParticleParams = new ParticleParams();
+    params.Count = 5;
+    params.Position.copy(pos);
+    params.Rotation.x = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
+    params.Speed = Random.float(40, 100);
+    params.Color.Min.set(0.6, 0, 0);
+    params.Color.Max.set(1,0,0);
+    params.InitialScale.Min.set(0.9,0.9,0.9);
+    params.InitialScale.Min.set(1.2,1.2,1.2);
+    this.create(params);
+  }
 }
 
-
 let g_input: Input = null;
-let light: THREE.PointLight = new THREE.PointLight(0xffff99, 1, 100);
+let g_pointlight: THREE.PointLight = null;
+let g_pointlight2: THREE.PointLight = null;
+let g_pointlight3: THREE.PointLight = null;
+let g_ambientlight: THREE.AmbientLight = null;
 let camera: THREE.PerspectiveCamera = null;
 
 let g_physics: PhysicsManager = null;
@@ -1030,12 +1538,15 @@ let g_physics: PhysicsManager = null;
 let renderer: THREE.WebGLRenderer = null;
 let gui: dat.GUI = null;
 let score: TextCanvas = null;
+let bombs: TextCanvas = null;
 let axis: THREE.AxesHelper = null;
 let user: THREE.Group = null;
 let shipTimer: Timer = null;
 let player: PlayerShip = null;
 let g_audio: AudioManager = null;
 let g_models: ModelManager = null;
+let g_screen: Screen = null;
+let g_particles: Particles = null;
 
 // https://threejsfundamentals.org/threejs/lessons/threejs-custom-geometry.html
 // https://threejsfundamentals.org/threejs/lessons/threejs-webvr.html
@@ -1048,7 +1559,7 @@ $(document).ready(function () {
   let showConsole: boolean = url_params.get('console') === 'true';
   Globals.setDebug(debug, showConsole);
 
-  createRenderer();
+  initGame();
 
   window.addEventListener('resize', function () {
     //This should cause the resize method to fire.
@@ -1059,7 +1570,7 @@ $(document).ready(function () {
 
 
 });
-function createRenderer(): void {
+function initGame(): void {
   //Recreates the renderer (user can toggle VR off)
   const canvas: HTMLCanvasElement = document.querySelector('#page_canvas');
 
@@ -1086,6 +1597,8 @@ function createRenderer(): void {
     document.body.appendChild(renderer.domElement);
   }
 
+  g_screen = new Screen(canvas);
+
   g_physics = new PhysicsManager();
 
   g_input = new Input();
@@ -1101,17 +1614,20 @@ function createRenderer(): void {
 
   createUIText();
 
+  g_particles = new Particles();
+
   shipTimer = new Timer(3000, function () {
     let nShips = Random.bool() ? 2 : 1;//(Random.bool() ? 2 : (Random.bool() ? 4 : 6));
     for (let i = 0; i < nShips; ++i) {
       //Create enemy ship and 
-      let m: THREE.Mesh = g_models.getModel(Files.Model.Enemy_Ship) as THREE.Mesh;
+      let m : THREE.Mesh = Random.float(0,1)>0.8 ? g_models.getModel(Files.Model.Enemy_Ship2) as THREE.Mesh : g_models.getModel(Files.Model.Enemy_Ship) as THREE.Mesh;
       if (m) {
         let mclone: THREE.Mesh = m.clone();
         let ship: EnemyShip = new EnemyShip(mclone);
         ship.position.copy(player.position.clone().add(new Vector3(Random.float(-20, 20), Random.float(-13, 23), -60)));
         ship.Velocity.set(0, 0, 1.04 + Random.float(0.7, 9.05));
-        ship.Rotation.set(0,0,Random.float(0,1) > 0.7 ? Random.float(-3,3) : 0);
+        ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
+        ship.scale.set(3,3.3,3);
       }
 
       //scene.add(ship);
@@ -1123,6 +1639,8 @@ function createRenderer(): void {
     g_physics.Scene.add(axis);
 
   }
+
+  g_audio.play(Files.Audio.Electro_Sketch);
 
   renderLoop();
 }
@@ -1142,7 +1660,7 @@ function createCamera() {
   player.up = new Vector3(0, 1, 0);
   player.position.set(0, 0, 10);
   player.Velocity.set(0, 0, -1);
-  player.OutOfWorld = OutOfWorldResponse.None;
+  player.Destroy = function() { /*do not destroy player */ }
   player.rotateY(0);
 }
 function renderLoop() {
@@ -1162,7 +1680,12 @@ function renderLoop() {
     Globals.updateGlobals(camera, user);
 
     if (score) {
+      score.Text = "Score: " + player.score;
       score.update(camera, user);
+    }
+    if (bombs) {
+      bombs.Text = "Bombs: " + player.bombs;
+      bombs.update(camera, user);
     }
     if (shipTimer) {
       shipTimer.update(delta);
@@ -1173,10 +1696,15 @@ function renderLoop() {
     if (axis) {
       axis.position.set(player.position.x - 3, player.position.y - 3, player.position.z - 10);
     }
-    if (light) {
-      light.position.copy(player.position.clone().add(new Vector3(10, 10, -10)));
+    if (g_pointlight) {
+      g_pointlight.position.copy(player.position.clone().add(new Vector3(-500, 100, -500)));
     }
-
+    if (g_pointlight2) {
+      g_pointlight2.position.copy(player.position.clone().add(new Vector3(500, 100, -500)));
+    }
+    if (g_pointlight3) {
+      g_pointlight2.position.copy(player.position.clone().add(new Vector3(0, 1, -2)));
+    }
     renderer.render(g_physics.Scene, camera);
   };
   renderer.setAnimationLoop(render);
@@ -1211,12 +1739,17 @@ function createScene() {
     g_physics.Scene.background = texture;
   }
 
-  g_physics.Scene.add(light);
+  g_ambientlight = new THREE.AmbientLight(0x404040);
+  g_physics.Scene.add(g_ambientlight);
+
+  g_pointlight = new THREE.PointLight(0xffff99, 1, 2000);
+  g_physics.Scene.add(g_pointlight);
+  g_pointlight2 = new THREE.PointLight(0xffff99, 1, 2000);
+  g_physics.Scene.add(g_pointlight2);
+  g_pointlight3 = new THREE.PointLight(0xffffff, 0.4, 100);
+  g_physics.Scene.add(g_pointlight3);
 }
-
-
 function createUIText(): void {
-
   //Create Console
   Globals.setConsole3D(g_physics.Scene, player);
 
@@ -1227,14 +1760,26 @@ function createUIText(): void {
   opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
   opts.Height = 0.1;
   opts.AutoHeight = false;
+
   score = new TextCanvas(opts);
   score.showWireframe(Globals.isDebug());
-  //score.resetTransform();
   score.AlignToScreen = true;
   score.ScreenX = 0.0;
   score.ScreenY = 0.9;
+  score.ScreenZ = 3;
 
   player.add(score);
+
+  opts.Text = "Bombs: " + player.bombs;
+  bombs = new TextCanvas(opts);
+  bombs.showWireframe(Globals.isDebug());
+  bombs.AlignToScreen = true;
+  bombs.ScreenX = 0.7;
+  bombs.ScreenY = 0.9;
+  bombs.ScreenZ = 3;
+
+  player.add(bombs);
+
   //Globals.logInfo("hi1\nasdf\nhi2\n")
 }
 
