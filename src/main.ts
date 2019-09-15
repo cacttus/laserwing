@@ -1116,8 +1116,9 @@ class Item extends Projectile {
     this.Collide = function (b: PhysicsObject) {
       if (g_isgameover == false) {
         if (b instanceof Bullet) {
-          that._health -= 1
+          that._health -= 1;
           g_particles.createItemParticles(this.WorldPosition);
+          b.destroy();
         }
         else if (b instanceof PlayerShip) {
           that.giveItem();
