@@ -24,6 +24,7 @@ namespace Files {
     Bomb = 'bomb.ogg',
     Nope = 'nope.ogg',
     Ship_Explode = 'ship_explode.ogg',
+    Get_Item = 'getitem.ogg',
     Ship_Hit = 'ship_hit.ogg',
     Electro_Sketch = 'electro_sketch.ogg',
   }
@@ -31,9 +32,11 @@ namespace Files {
     Player_Ship = 'player_ship.glb',
     Enemy_Ship = 'enemy_ship.glb',
     Enemy_Ship2 = 'enemy_ship2.glb',
+    Enemy_Ship3 = 'enemy_ship3.glb',
     Bullet = 'bullet.glb',
     Bomb = 'bomb.glb',
     Bomb_Explosion = 'bomb_explosion.glb',
+    Item = 'item.glb',
   }
 }
 //https://stackoverflow.com/questions/38213926/interface-for-associative-object-array-in-typescript
@@ -250,7 +253,7 @@ class Mouse extends Vector3 {
       let vxy3: Vector3 = new Vector3(vxy.x, vxy.y, vxy.z);
 
       vxy3.normalize().multiplyScalar(5);
-      vxy3.add(player.WorldPosition);
+      vxy3.add(g_player.WorldPosition);
       // let f : Frustum = new Frustum(new Vector3(0,0,-1), player.position);
       //let v3 : Vector3 = f.projectScreen(v2.x,v2.y);
 
@@ -306,7 +309,7 @@ class Input {
           box_geo.computeBoundingBox(); // for hit area
           var box_mesh = new THREE.Mesh(box_geo, box_mat);
           g.add(box_mesh);
-          player.add(g);
+          g_player.add(g);
           Globals.logInfo("added controller.");
 
           g.MoveController = function () {
@@ -383,10 +386,10 @@ class Frustum {
 
     let back_plane: Vector3 = this._ftl.clone().add(dx).add(dy);
 
-    let projected: Vector3 = back_plane.clone().sub(player.position).normalize().multiplyScalar(dist);
+    let projected: Vector3 = back_plane.clone().sub(g_player.position).normalize().multiplyScalar(dist);
 
     let cam_pos: Vector3 = new Vector3();
-    player.getWorldPosition(cam_pos);
+    g_player.getWorldPosition(cam_pos);
     projected.add(cam_pos);
 
     return projected;
@@ -399,7 +402,7 @@ class Frustum {
     }
     if (cam_pos == null) {
       cam_pos = new Vector3();
-      player.getWorldPosition(cam_pos);
+      g_player.getWorldPosition(cam_pos);
     }
 
     let nearCenter: Vector3 = cam_pos.clone().add(cam_dir.clone().multiplyScalar(camera.near));
@@ -424,7 +427,6 @@ class Frustum {
     this._ntr = nearCenter.clone().add(cup_near).add(crt_near);
     this._nbl = nearCenter.clone().sub(cup_near).sub(crt_near);
   }
-
 }
 enum TimerState { Stopped, Running }
 class Timer {
@@ -459,7 +461,6 @@ class Timer {
     }
   }
 }
-
 class PointGeo extends THREE.Object3D {
   public constructor() {
     super();
@@ -581,20 +582,22 @@ class PhysicsObject extends THREE.Object3D {
   private _scale: Vector3 = new Vector3();
   protected _model: THREE.Object3D = null;
   private _boxHelper: THREE.BoxHelper = null;
+  get model(): THREE.Object3D { return this._model; }
 
-  private _destroy : any = function() { 
+  private _destroy: any = function () {
     //Destroy if we are too far awawy from the player.
-    let ca: boolean = Math.abs(this.WorldPosition.z - player.WorldPosition.z) > 500;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
+    let ca: boolean = Math.abs(this.WorldPosition.z - g_player.WorldPosition.z) > 500;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
     //Destroy if we are behind the player (we only move forward in the z)
-    let cb: boolean = this.position.z - player.position.z > 10;
+    let cb: boolean = this.position.z - g_player.position.z > 10;
     //Destroy if our scale is zero
     let cc: boolean = (this.scale.x < 0.0001) && (this.scale.y < 0.0001) && (this.scale.z < 0.0001);
     return ca || cb || cc;
   }
-  get Destroy() : any { return this._destroy; }
-  set Destroy(v:any) { this._destroy = v;}
+  get Destroy(): any { return this._destroy; }
+  set Destroy(v: any) { this._destroy = v; }
 
   //Setting Collide will add or remove the object from the game's collider list
+  //If collide is null, the object doesn't collide with anything.  This is for performance reasons.  Don't set Collide if the object doesn't collide (for example is a collidee)
   private _collide: any = null;
   get Collide(): any { return this._collide; }
   set Collide(f: any) {
@@ -637,7 +640,7 @@ class PhysicsObject extends THREE.Object3D {
         if (mod.material) {
           let mat: THREE.MeshBasicMaterial = mod.material as THREE.MeshBasicMaterial;
           if (mat) {
-            mat.color.setRGB(val.x,val.y,val.z);
+            mat.color.setRGB(val.x, val.y, val.z);
           }
         }
       }
@@ -657,11 +660,11 @@ class PhysicsObject extends THREE.Object3D {
     this.rotation.y = (this.rotation.y + rdt.y) % Math.PI;
     this.rotation.z = (this.rotation.z + rdt.z) % Math.PI;
     this.scale.x += this._scale.x * dt;
-    if(this.scale.x < 0 ){ this.scale.x = 0;}
+    if (this.scale.x < 0) { this.scale.x = 0; }
     this.scale.y += this._scale.y * dt;
-    if(this.scale.y < 0 ){ this.scale.y = 0;}
+    if (this.scale.y < 0) { this.scale.y = 0; }
     this.scale.z += this._scale.z * dt;
-    if(this.scale.z < 0 ){ this.scale.z = 0;}
+    if (this.scale.z < 0) { this.scale.z = 0; }
 
     // if (this._bbox) {
     //   this._bbox.translate(this.position);
@@ -682,8 +685,6 @@ class PhysicsObject extends THREE.Object3D {
     this._model = null;
     this._boxHelper = null;
     if (m !== null) {
-
-      // this._bbox = new THREE.Box3().setFromObject(m);
       this._model = m;
       this.add(this._model);
 
@@ -693,13 +694,16 @@ class PhysicsObject extends THREE.Object3D {
       }
     }
   }
-
 }
 //Ship class representing both player and enemy ship.
 enum Direction { Left, Right, None }
 class Ship extends PhysicsObject {
   protected _health: number = 100;
-
+  protected _maxhealth: number = 100;
+  get health(): number { return this._health; }
+  get maxhealth(): number { return this._maxhealth; }
+  set health(v: number) { this._health = v }
+  //set maxhealth(v:number) { this._maxhealth=v }
   private _movedLeft: boolean = false;
   private _movedRight: boolean = false;
   private _movedUp: boolean = false;
@@ -896,6 +900,7 @@ class WaitTimer {
 class PlayerShip extends Ship {
   // private _arms: Array<Arm> = new Array<Arm>();
   public bombs: number = 3;
+  public maxbombs: number = 3;
   public score: number = 0;
   public bombTimer: WaitTimer = new WaitTimer(3);
   public bulletTimer: WaitTimer = new WaitTimer(0.2);
@@ -903,31 +908,63 @@ class PlayerShip extends Ship {
   public gun2pos: THREE.Object3D = null;
   public constructor() {
     super();
+    this.Collide = function (b: PhysicsObject) {
+      if (g_isgameover == false) {
+        if (b instanceof EnemyShip) {
+          g_particles.createShipHitParticles(this.position);
+          g_particles.createShipDieParticles(this.position);
+          g_audio.play(Files.Audio.Ship_Hit);
+          this._health -= 100;
+          b.destroy();
+        }
+        if (this._health <= 0) {
+          this._health = 0;
+          g_particles.createShipDieParticles(this.WorldPosition);
+          g_audio.play(Files.Audio.Ship_Explode);
+
+          stopGame();
+
+          //g_gameovertimer.
+        }
+      }
+    };
   }
+  private _nresetclick = 0;
   public update(dt: number) {
-    this.bombTimer.update(dt);
-    this.bulletTimer.update(dt);
+    if (g_isgameover == false) {
+      this.bombTimer.update(dt);
+      this.bulletTimer.update(dt);
 
-    if (g_input.keyboard) {
-      if (g_input.keyboard.a.down()) {
-        this.moveLeft(dt);
+      if (g_input.keyboard) {
+        if (g_input.keyboard.a.down()) {
+          this.moveLeft(dt);
+        }
+        if (g_input.keyboard.d.down()) {
+          this.moveRight(dt);
+        }
+        if (g_input.keyboard.w.down()) {
+          this.moveUp(dt);
+        }
+        if (g_input.keyboard.s.down()) {
+          this.moveDown(dt);
+        }
       }
-      if (g_input.keyboard.d.down()) {
-        this.moveRight(dt);
+
+      if (g_input.mouse.Right.pressed()) {
+        this.tryFireBomb();
       }
-      if (g_input.keyboard.w.down()) {
-        this.moveUp(dt);
-      }
-      if (g_input.keyboard.s.down()) {
-        this.moveDown(dt);
+      if (g_input.mouse.Left.pressOrHold()) {
+        this.tryFireBullet();
       }
     }
-
-    if (g_input.mouse.Right.pressed()) {
-      this.tryFireBomb();
-    }
-    if (g_input.mouse.Left.pressOrHold()) {
-      this.tryFireBullet();
+    else {
+      if (g_input.mouse.Left.pressed()) {
+        this._nresetclick++;
+      }
+      if (this._nresetclick == 4) {
+        this._nresetclick = 0;
+        startGame();
+      }
     }
 
     super.update(dt);
@@ -941,11 +978,11 @@ class PlayerShip extends Ship {
 
       let v: THREE.Vector3 = new THREE.Vector3();
 
-      player.gun1pos.getWorldPosition(v);
+      g_player.gun1pos.getWorldPosition(v);
       let b1: Bullet = new Bullet(n);
       b1.position.copy(v);
 
-      player.gun2pos.getWorldPosition(v);
+      g_player.gun2pos.getWorldPosition(v);
       let b2: Bullet = new Bullet(n);
       b2.position.copy(v);
 
@@ -963,7 +1000,7 @@ class PlayerShip extends Ship {
 
         //shoot from gun1, why not?
         let v: THREE.Vector3 = new THREE.Vector3();
-        player.gun1pos.getWorldPosition(v);
+        g_player.gun1pos.getWorldPosition(v);
         b1.position.copy(v);
 
         g_audio.play(Files.Audio.Bomb_Shoot);
@@ -979,9 +1016,12 @@ class PlayerShip extends Ship {
   }
 }
 class EnemyShip extends Ship {
-
-  public constructor(model: THREE.Object3D) {
+  private _droprate: number = 0;
+  public constructor(model: THREE.Object3D, droprate: number) {
     super();
+
+    this._droprate = droprate;//% chance of a drop.
+
     if (model) {
       this.setModel(model);
     }
@@ -1008,8 +1048,21 @@ class EnemyShip extends Ship {
         this._health = 0;
         g_particles.createShipDieParticles(this.WorldPosition);
         g_audio.play(Files.Audio.Ship_Explode);
+
+        //Drop Item
+        if (g_player.health < g_player.maxhealth || g_player.bombs < g_player.maxbombs) {
+          let drop: number = (1.0 - this._droprate * 0.01);
+          if (Random.float(0, 1) >= drop) {
+            let item = new Item();
+            item.position.copy(this.position);
+          }
+        }
+
+        //Incement score
+        g_player.score += 1;
+
+        //Kill it
         this.destroy();
-        player.score += 1;
       }
     };
 
@@ -1034,19 +1087,18 @@ class EnemyShip extends Ship {
 }
 class Projectile extends PhysicsObject {
   private _speed: number = 40;//.4;
-
   public constructor(spd: number, direction: Vector3, model: Files.Model) {
     super();
-    
+
     this.Collide = function () { }//Force object to collide
-    
+
     this._speed = spd;
     let b = g_models.getModel(model);
     if (b != null) {
       let b2 = b.clone();
       this.setModel(b2);
 
-      this.lookAt( this.position.clone().add(direction));
+      this.lookAt(this.position.clone().add(direction));
     }
     else {
       Globals.logError("Could not find model" + model);
@@ -1054,11 +1106,58 @@ class Projectile extends PhysicsObject {
     this.Velocity.copy(direction.clone().multiplyScalar(this._speed));
   }
 }
+class Item extends Projectile {
+  private _health = 5;
+  public constructor() {
+    super(0, new Vector3(0, 0, -1), Files.Model.Item);
+    this.RotationDelta.y = Math.PI * 1.0093;
+    let that = this;
+
+    this.Collide = function (b: PhysicsObject) {
+      if (g_isgameover == false) {
+        if (b instanceof Bullet) {
+          that._health -= 1
+          g_particles.createItemParticles(this.WorldPosition);
+        }
+        else if (b instanceof PlayerShip) {
+          that.giveItem();
+        }
+
+        if (that._health <= 0) {
+          that._health = 0;
+          that.giveItem();
+        }
+      }
+    };
+
+  }
+  private giveItem() {
+    g_audio.play(Files.Audio.Get_Item);
+    let playership: PlayerShip = g_player;
+
+    //Give player powerup based on what's missing
+    if (playership.bombs === playership.maxbombs) {
+      playership.health = Math.min(playership.health + 10, playership.maxhealth);
+    }
+    else if (playership.health === playership.maxhealth) {
+      playership.bombs = Math.min(playership.bombs + 1, playership.maxbombs);
+    }
+    else {
+      let r = Random.float(0, 1);
+      if (r > 0.8) {
+        playership.health = Math.min(playership.health + 10, playership.maxhealth);
+      }
+      else {
+        playership.bombs = Math.min(playership.bombs + 1, playership.maxbombs);
+      }
+    }
+    this.destroy();
+  }
+}
 class Bullet extends Projectile {
   public constructor(direction: Vector3) {
     super(90, direction, Files.Model.Bullet);
   }
-
 }
 class Bomb extends Projectile {
   private _boomtimer: WaitTimer = new WaitTimer(2.5);
@@ -1254,8 +1353,8 @@ class RenderManager {
  * Manages Audio using the THREE WebAudio interface
  */
 class AudioManager {
-  private _listener: THREE.AudioListener = new THREE.AudioListener();
-  private _audioLoader: THREE.AudioLoader = new THREE.AudioLoader();
+  public _listener: THREE.AudioListener = new THREE.AudioListener();
+  public _audioLoader: THREE.AudioLoader = new THREE.AudioLoader();
   private _cache: Dictionary<THREE.Audio> = {};
 
   public constructor() {
@@ -1263,16 +1362,36 @@ class AudioManager {
     this._audioLoader = new THREE.AudioLoader();
     camera.add(this._listener);
   }
-  public play(file: Files.Audio, loop: boolean = false) {
+
+  public play(file: Files.Audio, loop: boolean = false, cache: boolean = false) {
+    let that = this;
     let szfile: string = './dat/audio/' + file;
 
-    if (szfile in this._cache) {
-      this._cache[szfile].setLoop(loop);
-      this._cache[szfile].play();
+    //Three, or WebAudio must be doing some background caching, so the cache here is actually not needed, and hinders audio performance.
+    if (cache === false) {
+      //reload instance each time.
+      this._audioLoader.load(szfile, function (buffer: THREE.AudioBuffer) {
+        let a = new THREE.Audio(that._listener);
+        a.setBuffer(buffer);
+        a.setLoop(loop);
+        a.setVolume(1);
+        a.play();
+      }, function (xhr: any) {
+        Globals.logDebug(" " + szfile + " loading " + xhr)
+      }, function (err: any) {
+        Globals.logError('Error loading  sound ' + szfile + " : " + err);
+      });
     }
     else {
-      this.loadSound(szfile, loop);
+      if (szfile in this._cache) {
+        this._cache[szfile].setLoop(loop);
+        this._cache[szfile].play();
+      }
+      else {
+        this.loadSound(szfile, loop);
+      }
     }
+
   }
   private loadSound(file: string, loop: boolean): void {
     this._cache[file] = new THREE.Audio(this._listener);
@@ -1311,14 +1430,14 @@ class ModelManager {
       if (success) {
         let player_ship: THREE.Object3D = objs['Player_Ship'];
         player_ship.scale.set(.6, .6, .6);
-        player.setModel(player_ship);
-        player.gun1pos = new THREE.Object3D();
-        player.gun1pos.position.copy(objs['Gun1'].position);
-        player_ship.add(player.gun1pos);
+        g_player.setModel(player_ship);
+        g_player.gun1pos = new THREE.Object3D();
+        g_player.gun1pos.position.copy(objs['Gun1'].position);
+        player_ship.add(g_player.gun1pos);
 
-        player.gun2pos = new THREE.Object3D();
-        player.gun2pos.position.copy(objs['Gun2'].position);
-        player_ship.add(player.gun2pos);
+        g_player.gun2pos = new THREE.Object3D();
+        g_player.gun2pos.position.copy(objs['Gun2'].position);
+        player_ship.add(g_player.gun2pos);
 
         let player_pos = objs['Player_Seat'].position;
         user.position.copy(player_pos);
@@ -1337,6 +1456,14 @@ class ModelManager {
     this.loadModel(Files.Model.Enemy_Ship2, ['Enemy_Ship2'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
         let enemy_ship: THREE.Object3D = objs['Enemy_Ship2'];
+        enemy_ship.scale.set(.6, .6, .6);
+        return enemy_ship;
+      }
+      return null;
+    });
+    this.loadModel(Files.Model.Enemy_Ship3, ['Enemy_Ship3'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let enemy_ship: THREE.Object3D = objs['Enemy_Ship3'];
         enemy_ship.scale.set(.6, .6, .6);
         return enemy_ship;
       }
@@ -1387,7 +1514,21 @@ class ModelManager {
       }
       return null;
     });
-
+    this.loadModel(Files.Model.Item, ['Item'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let a: THREE.Object3D = objs['Item'];
+        a.scale.set(1.5, 1.5, 1.5);
+        let b = a as THREE.Mesh;
+        if (b) {
+          let m = b.material as THREE.Material;
+          if (m) {
+            m.flatShading = true;
+          }
+        }
+        return a;
+      }
+      return null;
+    });
   }
   private loadModel(filename: string, obj_names_in_scene: Array<string>, afterLoad: any) {
     let that = this;
@@ -1429,26 +1570,29 @@ class ModelManager {
     );
   }
 }
-class IAFloat { 
-  public Min : Number =0;
-  public Max : Number = 1;
-  public constructor(min: number, max : number){
+class IAFloat {
+  public Min: number = 0;
+  public Max: number = 1;
+  public constructor(min: number, max: number) {
     this.Min = min;
     this.Max = max;
+  }
+  public calc(): number {
+    return Random.float(this.Min, this.Max);
   }
 }
-class IAVec3 { 
-  public Min : Vector3 = new Vector3(0,0,0);
-  public Max : Vector3 = new Vector3(1,1,1);
-  public constructor(min: Vector3, max : Vector3){
+class IAVec3 {
+  public Min: Vector3 = new Vector3(0, 0, 0);
+  public Max: Vector3 = new Vector3(1, 1, 1);
+  public constructor(min: Vector3, max: Vector3) {
     this.Min = min;
     this.Max = max;
   }
-  public calc() : Vector3 {
-    let r : Vector3 = new Vector3();
-    r.x = Random.float(this.Min.x,this.Max.x);
-    r.y = Random.float(this.Min.y,this.Max.y);
-    r.z = Random.float(this.Min.z,this.Max.z);
+  public calc(): Vector3 {
+    let r: Vector3 = new Vector3();
+    r.x = Random.float(this.Min.x, this.Max.x);
+    r.y = Random.float(this.Min.y, this.Max.y);
+    r.z = Random.float(this.Min.z, this.Max.z);
     return r;
   }
 }
@@ -1457,9 +1601,9 @@ class ParticleParams {
   public Speed: number = 70; //m/s
   public Position: Vector3 = new Vector3();
   public Scale: Vector3 = new Vector3(0, 0, 0);
-  public InitialScale : IAVec3 = new IAVec3(new Vector3(1,1,1), new Vector3(1,1,1));
+  public InitialScale: IAVec3 = new IAVec3(new Vector3(1, 1, 1), new Vector3(1, 1, 1));
   public Rotation: Vector3 = new Vector3(0, 0, 0);
-  public Color: IAVec3 = new IAVec3(new Vector3(0,0,0), new Vector3(1,1,1));
+  public Color: IAVec3 = new IAVec3(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
 }
 class Particle extends PhysicsObject {
   public constructor(m: THREE.Mesh) {
@@ -1469,7 +1613,7 @@ class Particle extends PhysicsObject {
   }
 }
 class Particles {
- // private _particles: Array<Particle> = new Array<Particle>();
+  // private _particles: Array<Particle> = new Array<Particle>();
   private _mesh: THREE.Mesh = null;
 
   public constructor() {
@@ -1504,9 +1648,22 @@ class Particles {
     params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
-    params.Speed = Random.float(40, 100);
+    params.Speed = Random.float(10, 100);
     params.Color.Min.set(0.7, 0.7, 0);
-    params.Color.Max.set(1,1,0);
+    params.Color.Max.set(1, 1, 0);
+    this.create(params);
+  }
+  public createItemParticles(pos: Vector3) {
+    let params: ParticleParams = new ParticleParams();
+    params.Count = 5;
+    params.Position.copy(pos);
+    params.Rotation.x = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
+    params.Speed = Random.float(10, 40);
+    params.Color.Min.set(0.3, 0.3, 0.7);
+    params.Color.Max.set(0.3, 0.3, 1);
     this.create(params);
   }
   public createShipHitParticles(pos: Vector3) {
@@ -1519,9 +1676,9 @@ class Particles {
     params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
     params.Speed = Random.float(40, 100);
     params.Color.Min.set(0.6, 0, 0);
-    params.Color.Max.set(1,0,0);
-    params.InitialScale.Min.set(0.9,0.9,0.9);
-    params.InitialScale.Min.set(1.2,1.2,1.2);
+    params.Color.Max.set(1, 0, 0);
+    params.InitialScale.Min.set(0.9, 0.9, 0.9);
+    params.InitialScale.Min.set(1.2, 1.2, 1.2);
     this.create(params);
   }
 }
@@ -1538,15 +1695,19 @@ let g_physics: PhysicsManager = null;
 let renderer: THREE.WebGLRenderer = null;
 let gui: dat.GUI = null;
 let score: TextCanvas = null;
-let bombs: TextCanvas = null;
+let g_bombs: TextCanvas = null;
 let axis: THREE.AxesHelper = null;
 let user: THREE.Group = null;
-let shipTimer: Timer = null;
-let player: PlayerShip = null;
+let g_shipTimer: Timer = null;
+let g_player: PlayerShip = null;
 let g_audio: AudioManager = null;
 let g_models: ModelManager = null;
 let g_screen: Screen = null;
 let g_particles: Particles = null;
+let g_music: THREE.Audio = null;
+
+let g_gameover: TextCanvas = null;
+let g_isgameover: boolean = false;
 
 // https://threejsfundamentals.org/threejs/lessons/threejs-custom-geometry.html
 // https://threejsfundamentals.org/threejs/lessons/threejs-webvr.html
@@ -1586,7 +1747,6 @@ function initGame(): void {
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
-
   Globals.setRenderer(renderer);
 
   if (Globals.VRSupported()) {
@@ -1616,23 +1776,6 @@ function initGame(): void {
 
   g_particles = new Particles();
 
-  shipTimer = new Timer(3000, function () {
-    let nShips = Random.bool() ? 2 : 1;//(Random.bool() ? 2 : (Random.bool() ? 4 : 6));
-    for (let i = 0; i < nShips; ++i) {
-      //Create enemy ship and 
-      let m : THREE.Mesh = Random.float(0,1)>0.8 ? g_models.getModel(Files.Model.Enemy_Ship2) as THREE.Mesh : g_models.getModel(Files.Model.Enemy_Ship) as THREE.Mesh;
-      if (m) {
-        let mclone: THREE.Mesh = m.clone();
-        let ship: EnemyShip = new EnemyShip(mclone);
-        ship.position.copy(player.position.clone().add(new Vector3(Random.float(-20, 20), Random.float(-13, 23), -60)));
-        ship.Velocity.set(0, 0, 1.04 + Random.float(0.7, 9.05));
-        ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
-        ship.scale.set(3,3.3,3);
-      }
-
-      //scene.add(ship);
-    }
-  });
 
   if (Globals.isDebug()) {
     axis = new THREE.AxesHelper(1);
@@ -1640,9 +1783,99 @@ function initGame(): void {
 
   }
 
-  g_audio.play(Files.Audio.Electro_Sketch);
+  loadMusic();
+
+  startGame();
 
   renderLoop();
+}
+function loadMusic() {
+  let music_file = './dat/audio/' + Files.Audio.Electro_Sketch;
+  g_audio._audioLoader.load(music_file, function (buffer: THREE.AudioBuffer) {
+    g_music = new THREE.Audio(g_audio._listener);
+    g_music.setBuffer(buffer);
+    g_music.setLoop(true);
+    g_music.setVolume(1);
+    g_music.play();
+  }, function (xhr: any) {
+    Globals.logDebug(" " + music_file + " loading " + xhr)
+  }, function (err: any) {
+    Globals.logError('Error loading  sound ' + music_file + " : " + err);
+  });
+}
+function startGame() {
+  if (g_player.model) {
+    //won't be loaded when starting fresh, but after a Game Over, this will be set
+    g_player.model.visible = true;
+  }
+  g_player.score = 0;
+  g_bombs.visible = true;
+  g_gameover.visible = false;
+  if (g_music && g_music.isPlaying === false) {
+    g_music.play();
+  }
+  g_shipTimer = new Timer(3000, function () {
+    createEnemies();
+  });
+  g_isgameover = false;
+  g_player.health = g_player.maxhealth;
+  g_player.bombs = g_player.maxbombs;
+}
+function stopGame() {
+  g_player.model.visible = false;
+  g_isgameover = true;
+  g_gameover.visible = true;
+  g_bombs.visible = false;
+  if(g_music) { 
+    g_music.stop();
+  }
+
+}
+
+class ShipProb {
+  public prob = 0;
+  public speed_base: number = 0;
+  public speed: IAFloat = new IAFloat(0, 1);
+  public scale: Vector3 = new Vector3(1, 1, 1);
+  public droprate: number = 0;
+}
+function createEnemies() {
+  let nShips = 1;
+
+  for (let i = 0; i < nShips; ++i) {
+    let ships: Dictionary<ShipProb> = {};
+
+    ships[Files.Model.Enemy_Ship] = { prob: 0.4, speed_base: 20, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3), droprate: 20 };//{prob:0.4};
+    ships[Files.Model.Enemy_Ship2] = { prob: 0.6, speed_base: 15, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 80 };
+    ships[Files.Model.Enemy_Ship3] = { prob: 1.0, speed_base: 25, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 30 };
+
+    let f: number = Random.float(0, 1);
+    let ship: Files.Model = Files.Model.Enemy_Ship;
+    let prob_struct: ShipProb = ships[Files.Model.Enemy_Ship];
+    for (let i = 0; i < Object.keys(ships).length; i++) {
+      let key = Object.keys(ships)[i];
+
+      if (ships[key].prob >= f) {
+        ship = key as Files.Model;
+        prob_struct = ships[key];
+        break;
+      }
+    }
+    if (!ship) {
+      ship = Files.Model.Enemy_Ship;
+    }
+
+    //Create enemy ship and 
+    let m: THREE.Mesh = g_models.getModel(ship) as THREE.Mesh;
+    if (m) {
+      let mclone: THREE.Mesh = m.clone();
+      let ship: EnemyShip = new EnemyShip(mclone, prob_struct.droprate);
+      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-20, 20), Random.float(-13, 23), -200)));
+      ship.Velocity.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
+      // ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
+      ship.scale.copy(prob_struct.scale);
+    }
+  }
 }
 function createCamera() {
   const canvas: HTMLCanvasElement = document.querySelector('#page_canvas');
@@ -1655,17 +1888,19 @@ function createCamera() {
   user.position.set(0, 0.02, -0.12);
   user.rotateY(0);
 
-  player = new PlayerShip();
-  player.add(user);
-  player.up = new Vector3(0, 1, 0);
-  player.position.set(0, 0, 10);
-  player.Velocity.set(0, 0, -1);
-  player.Destroy = function() { /*do not destroy player */ }
-  player.rotateY(0);
+  g_player = new PlayerShip();
+  g_player.add(user);
+  g_player.up = new Vector3(0, 1, 0);
+  g_player.position.set(0, 0, 10);
+  g_player.Velocity.set(0, 0, -10);
+  g_player.Destroy = function () { /*do not destroy player */ }
+  g_player.rotateY(0);
 }
 function renderLoop() {
   let last_time: number = 0;
   let delta: number = 0;
+
+
   var render = function (time: number) {
     time *= 0.001;//convert to seconds I think
     delta = time - last_time;
@@ -1680,30 +1915,35 @@ function renderLoop() {
     Globals.updateGlobals(camera, user);
 
     if (score) {
-      score.Text = "Score: " + player.score;
+      score.Text = "Score: " + g_player.score;
       score.update(camera, user);
     }
-    if (bombs) {
-      bombs.Text = "Bombs: " + player.bombs;
-      bombs.update(camera, user);
+    if (g_gameover) {
+      g_gameover.Text = "Game Over!"
+      g_gameover.update(camera, user);
     }
-    if (shipTimer) {
-      shipTimer.update(delta);
+    if (g_bombs) {
+      g_bombs.Text = "Bombs: " + g_player.bombs + "/" + g_player.maxbombs + "\n "
+        + "Health: " + g_player.health + "/" + g_player.maxhealth;
+      g_bombs.update(camera, user);
+    }
+    if (g_shipTimer) {
+      g_shipTimer.update(delta);
     }
     if (g_physics) {
       g_physics.update(delta);
     }
     if (axis) {
-      axis.position.set(player.position.x - 3, player.position.y - 3, player.position.z - 10);
+      axis.position.set(g_player.position.x - 3, g_player.position.y - 3, g_player.position.z - 10);
     }
     if (g_pointlight) {
-      g_pointlight.position.copy(player.position.clone().add(new Vector3(-500, 100, -500)));
+      g_pointlight.position.copy(g_player.position.clone().add(new Vector3(-500, 100, -500)));
     }
     if (g_pointlight2) {
-      g_pointlight2.position.copy(player.position.clone().add(new Vector3(500, 100, -500)));
+      g_pointlight2.position.copy(g_player.position.clone().add(new Vector3(500, 100, -500)));
     }
     if (g_pointlight3) {
-      g_pointlight2.position.copy(player.position.clone().add(new Vector3(0, 1, -2)));
+      g_pointlight2.position.copy(g_player.position.clone().add(new Vector3(0, 1, -2)));
     }
     renderer.render(g_physics.Scene, camera);
   };
@@ -1751,10 +1991,12 @@ function createScene() {
 }
 function createUIText(): void {
   //Create Console
-  Globals.setConsole3D(g_physics.Scene, player);
+  Globals.setConsole3D(g_physics.Scene, g_player);
 
   //Test Score
-  let opts: TextCanvasOptions = new TextCanvasOptions();
+  let opts: TextCanvasOptions;
+
+  opts = new TextCanvasOptions();
   opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 300 : 100;
   opts.Text = "Score: 0";
   opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
@@ -1768,17 +2010,38 @@ function createUIText(): void {
   score.ScreenY = 0.9;
   score.ScreenZ = 3;
 
-  player.add(score);
+  g_player.add(score);
+  opts = new TextCanvasOptions();
+  opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 300 : 100;
+  opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
+  opts.Height = 0.1;
+  opts.AutoHeight = false;
+  opts.Text = "Bombs: " + g_player.bombs;
+  g_bombs = new TextCanvas(opts);
+  g_bombs.showWireframe(Globals.isDebug());
+  g_bombs.AlignToScreen = true;
+  g_bombs.ScreenX = 0.7;
+  g_bombs.ScreenY = 0.9;
+  g_bombs.ScreenZ = 3;
 
-  opts.Text = "Bombs: " + player.bombs;
-  bombs = new TextCanvas(opts);
-  bombs.showWireframe(Globals.isDebug());
-  bombs.AlignToScreen = true;
-  bombs.ScreenX = 0.7;
-  bombs.ScreenY = 0.9;
-  bombs.ScreenZ = 3;
+  g_player.add(g_bombs);
 
-  player.add(bombs);
+  opts = new TextCanvasOptions();
+  opts.Fontsize = opts.Lineheight = 200;
+  opts.Width = Globals.userIsInVR() ? 0.3 : 0.3;
+  opts.Height = 0.2;
+  opts.AutoHeight = false;
+  opts.Text = "Game Over!";
+  g_gameover = new TextCanvas(opts);
+  g_gameover.showWireframe(Globals.isDebug());
+  g_gameover.AlignToScreen = true;
+  g_gameover.ScreenX = 0.3;
+  g_gameover.ScreenY = 0.1;
+  g_gameover.ScreenZ = 8;
+
+  g_player.add(g_gameover);
+
+  g_gameover.visible = false;
 
   //Globals.logInfo("hi1\nasdf\nhi2\n")
 }

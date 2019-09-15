@@ -17,3 +17,6 @@ Then on your main git bash run
 This will start webpack-dev-server
 Also note You do not need @types/three because three comes with its own tuypes
   
+# Takeaways
+1. Audio mixing is BAD.  "Audio is already playing" should not be a thing.  Mix the audio into an audio buffer.
+2. Can't control the mouse cursor for a true First Person Shooter feel.  This, among other things, is crippling feature that will prevent browsers from ever being seen as serious by game developers. 
