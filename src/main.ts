@@ -1157,6 +1157,7 @@ class Item extends Projectile {
 class Bullet extends Projectile {
   public constructor(direction: Vector3) {
     super(90, direction, Files.Model.Bullet);
+    //this.Opacity = 0.7;
   }
 }
 class Bomb extends Projectile {
