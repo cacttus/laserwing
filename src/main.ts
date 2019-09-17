@@ -1,7 +1,7 @@
 import * as $ from "jquery";
 import * as THREE from 'three';
 import * as Physijs from 'physijs-webpack';
-import { Vector3, Vector2, Vector4, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3 } from 'three';
+import { Vector3, Vector2, Vector4, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3, Object3D, AlwaysStencilFunc } from 'three';
 
 import { WEBVR } from 'three/examples/jsm/vr/WebVR.js';
 import * as GLTFLoader_ from 'three/examples/jsm/loaders/GLTFLoader';
@@ -27,6 +27,9 @@ namespace Files {
     Get_Item = 'getitem.ogg',
     Ship_Hit = 'ship_hit.ogg',
     Electro_Sketch = 'electro_sketch.ogg',
+    LevelUp = 'levelup.ogg',
+    Moskito = 'moskito.ogg',
+    GameOver = 'gameover.ogg',
   }
   export enum Model {
     Player_Ship = 'player_ship.glb',
@@ -37,6 +40,7 @@ namespace Files {
     Bomb = 'bomb.glb',
     Bomb_Explosion = 'bomb_explosion.glb',
     Item = 'item.glb',
+    Boss = 'boss.glb',
   }
 }
 //https://stackoverflow.com/questions/38213926/interface-for-associative-object-array-in-typescript
@@ -154,6 +158,17 @@ class Keyboard {
       if (e.keyCode === 65) { that.a.update(true); }
       //d
       if (e.keyCode === 68) { that.d.update(true); }
+
+      //TESTS
+      //if (Globals.isDebug()) 
+      {
+        //f2
+        if (e.keyCode === 113) { enterBoss(); }
+        //f3
+        if (e.keyCode === 114) { exitBoss(); }
+      }
+
+
     });
     window.addEventListener("keyup", function (e) {
       //w
@@ -428,13 +443,14 @@ class Frustum {
     this._nbl = nearCenter.clone().sub(cup_near).sub(crt_near);
   }
 }
+interface TimerTickFunction { (): void; };
 enum TimerState { Stopped, Running }
 class Timer {
-  public Func: any = null;
+  public Func: TimerTickFunction = null;
   public Interval: number = 10; //milliseconds
   private _t: number = 0; //milliseocnds
   private _state: TimerState = TimerState.Stopped;
-  public constructor(interval: number, func: any) {
+  public constructor(interval: number, func: TimerTickFunction) {
     this.Func = func;
     this.Interval = interval;
     this.start();
@@ -444,6 +460,9 @@ class Timer {
     this._t = this.Interval;
   }
   public pause() {
+    this._state = TimerState.Stopped;
+  }
+  public stop() {
     this._state = TimerState.Stopped;
   }
   public update(dt: number) {
@@ -472,6 +491,8 @@ class PointGeo extends THREE.Object3D {
     this.add(points);
   }
 }
+interface DestroyAllObjectsFunction { (ob: PhysicsObject): boolean; }
+interface FindAllObjectsFunction { (ob: PhysicsObject): boolean; }
 class PhysicsManager {
   private _objects: Array<PhysicsObject> = new Array<PhysicsObject>();
   private _collide: Array<PhysicsObject> = new Array<PhysicsObject>();
@@ -481,6 +502,36 @@ class PhysicsManager {
 
   public Scene: THREE.Scene = null; //= new THREE.Scene();
 
+  public constructor() {
+  }
+  public findObjectOfType(fn: FindAllObjectsFunction): boolean {
+    if (fn) {
+      for (let i = 0; i < this._objects.length; ++i) {
+        //For why this looks weird see: https://github.com/Microsoft/TypeScript/issues/5236
+        if (fn(this._objects[i])) {
+          return true;
+        }
+      }
+    }
+    else {
+      Globals.logError("findobjectoftype - no function supplied.");
+    }
+    return false;
+  }
+  public destroyAllObjects(fn: DestroyAllObjectsFunction) {
+    if (fn) {
+      for (let i = 0; i < this._objects.length; ++i) {
+        //For why this looks weird see: https://github.com/Microsoft/TypeScript/issues/5236
+        if (fn(this._objects[i])) {
+          this.destroy(this._objects[i]);
+        }
+      }
+    }
+    else {
+      Globals.logError("destroyAllObjects - no function supplied.");
+
+    }
+  }
   public addOrRemoveCollider(ob: PhysicsObject) {
     if (ob.Collide != null) {
       for (let i = this._collide.length - 1; i >= 0; --i) {
@@ -509,9 +560,14 @@ class PhysicsManager {
     this.Scene.add(obj);
   }
   public destroy(obj: PhysicsObject) {
-    this.Scene.remove(obj);
-    this.toDestroy.push(obj);
-    obj.IsDestroyed = true;
+    if (obj.IsDestroyed === false) {
+      this.Scene.remove(obj);
+      this.toDestroy.push(obj);
+      if (obj.OnDestroy) {
+        obj.OnDestroy(obj);
+      }
+      obj.IsDestroyed = true;
+    }
   }
   private removeCollider(ob: PhysicsObject) {
     if (ob.Collide) {
@@ -571,36 +627,45 @@ class PhysicsManager {
       }
     }
     this.toDestroy = new Array<PhysicsObject>();
-
   }
 }
+interface PhysicsObjectCollisionCheck { (b: PhysicsObject): void; }
+interface PhysicsObjectDestroyCheck { (): boolean; }
+interface PhysicsObjectDestroyCallback { (ob: PhysicsObject): void; }
 class PhysicsObject extends THREE.Object3D {
   // protected _bbox = new THREE.Box3();
   private _velocity: Vector3 = new Vector3();
   private _isDestroyed: boolean = false;
   private _rotation: Vector3 = new Vector3();
   private _scale: Vector3 = new Vector3();
-  protected _model: THREE.Object3D = null;
+  protected _model: THREE.Mesh = null;
   private _boxHelper: THREE.BoxHelper = null;
-  get model(): THREE.Object3D { return this._model; }
+  get model(): THREE.Mesh { return this._model; }
 
-  private _destroy: any = function () {
+  protected _afterLoadModel: ModelObjectCallback = null; //Called after ship is loaded.  This is actually implemented (sloppily) by subclasses.
+  public OnDestroy: PhysicsObjectDestroyCallback = null;
+
+  //Default destroy routine for all objects.
+  private _destroy: PhysicsObjectDestroyCheck = function () {
     //Destroy if we are too far awawy from the player.
     let ca: boolean = Math.abs(this.WorldPosition.z - g_player.WorldPosition.z) > 500;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
     //Destroy if we are behind the player (we only move forward in the z)
-    let cb: boolean = this.position.z - g_player.position.z > 10;
+    let cb: boolean = this.position.z - g_player.position.z > 20;
     //Destroy if our scale is zero
     let cc: boolean = (this.scale.x < 0.0001) && (this.scale.y < 0.0001) && (this.scale.z < 0.0001);
-    return ca || cb || cc;
+    //Opacity is zero
+    let cd: boolean = this._opacity <= 0;
+
+    return ca || cb || cc || cd;
   }
   get Destroy(): any { return this._destroy; }
   set Destroy(v: any) { this._destroy = v; }
 
   //Setting Collide will add or remove the object from the game's collider list
   //If collide is null, the object doesn't collide with anything.  This is for performance reasons.  Don't set Collide if the object doesn't collide (for example is a collidee)
-  private _collide: any = null;
-  get Collide(): any { return this._collide; }
-  set Collide(f: any) {
+  private _collide: PhysicsObjectCollisionCheck = null;
+  get Collide(): PhysicsObjectCollisionCheck { return this._collide; }
+  set Collide(f: PhysicsObjectCollisionCheck) {
     this._collide = f;
     g_physics.addOrRemoveCollider(this);
   }
@@ -616,6 +681,10 @@ class PhysicsObject extends THREE.Object3D {
   set RotationDelta(val: Vector3) { this._rotation = val; }
   get ScaleDelta(): Vector3 { return this._scale; }
   set ScaleDelta(val: Vector3) { this._scale = val; }
+  set OpacityDelta(val:number) { this._opacityDelta = val;}
+  get OpacityDelta() : number { return this._opacityDelta;}
+  private _opacity:number =1;
+  private _opacityDelta:number =0;
 
   set Opacity(val: number) {
     if (this._model !== null) {
@@ -649,10 +718,15 @@ class PhysicsObject extends THREE.Object3D {
   public constructor() {
     super();
     g_physics.add(this);
+
+    //By default, set us to be the default box so, in case models fail to load, we can
+    //still see them.
+    this.setModel(this.createDefaultGeo());
   }
   public destroy() {
     g_physics.destroy(this);
   }
+
   public update(dt: number) {
     this.position.add(this.Velocity.clone().multiplyScalar(dt));
     let rdt = this.RotationDelta.clone().multiplyScalar(dt);
@@ -666,16 +740,19 @@ class PhysicsObject extends THREE.Object3D {
     this.scale.z += this._scale.z * dt;
     if (this.scale.z < 0) { this.scale.z = 0; }
 
-    // if (this._bbox) {
-    //   this._bbox.translate(this.position);
-    // }
+    if(this._opacityDelta != 0 ) {
+      this._opacity += this._opacityDelta * dt;
+      this._opacity = Math.min(1, Math.max(0,this._opacity));
+      this.Opacity = this._opacity;
+    }
+
   }
   public get WorldPosition(): Vector3 {
     let v = new Vector3();
     this.getWorldPosition(v);
     return v;
   }
-  public setModel(m: THREE.Object3D) {
+  public setModel(m: THREE.Mesh) {
     if (this._model) {
       this.remove(this._model);
     }
@@ -694,16 +771,43 @@ class PhysicsObject extends THREE.Object3D {
       }
     }
   }
+  protected createDefaultGeo(): THREE.Mesh {
+    var geo = new THREE.BoxBufferGeometry(.3, .03, .2);
+    geo.computeBoundingBox(); // for hit area
+    var mat = new THREE.MeshBasicMaterial({
+      //map: this._texture,
+      transparent: false,
+      side: THREE.DoubleSide,
+      color: 0x9FC013,
+    });
+    geo.computeBoundingBox();
+
+    let mesh: THREE.Mesh = new THREE.Mesh(geo, mat);
+    mesh.scale.set(Random.float(0.8, 5), Random.float(0.8, 2), Random.float(0.8, 2));
+
+    return mesh;
+  }
+
 }
+
 //Ship class representing both player and enemy ship.
 enum Direction { Left, Right, None }
 class Ship extends PhysicsObject {
-  protected _health: number = 100;
-  protected _maxhealth: number = 100;
+  protected _bulletSpeed: number = 30;
+  protected _damage = 10;
+
+  private _health: number = 100;
   get health(): number { return this._health; }
-  get maxhealth(): number { return this._maxhealth; }
   set health(v: number) { this._health = v }
-  //set maxhealth(v:number) { this._maxhealth=v }
+
+  protected _maxhealth: number = 100;
+  get maxhealth(): number { return this._maxhealth; }
+
+  private _guns: Array<Object3D> = new Array<Object3D>();
+  get Guns(): Array<Object3D> { return this._guns; }
+  set Guns(guns: Array<Object3D>) { this._guns = guns; }
+
+
   private _movedLeft: boolean = false;
   private _movedRight: boolean = false;
   private _movedUp: boolean = false;
@@ -732,10 +836,50 @@ class Ship extends PhysicsObject {
   private _rollRelease: number = 0;
   private _pitchRelease: number = 0;
 
-  public constructor() {
+  public constructor(sz_m: Files.Model, afterload: ModelObjectCallback) {
     super();
-  }
 
+    this._afterLoadModel = afterload;
+
+    let that = this;
+    g_models.setModelAsyncCallback(sz_m, function (m: THREE.Mesh) {
+      if (m) {
+        let mclone: THREE.Mesh = m.clone();
+        that.setModel(mclone);
+
+        mclone.traverse(function (ob: any) {
+          if (ob instanceof Object3D) {
+            let n: string = ob.name;
+            if (n.toLowerCase().startsWith('gun') && n.length >= 4) {
+              let id: number = 0;
+
+              if (id >= 0) {
+                that.Guns.push(ob);
+              }
+            }
+          }
+        });
+        if (that._afterLoadModel) {
+          that._afterLoadModel(that, m);
+        }
+
+      }
+    });
+
+  }
+  public fireBullets(dir: Vector3) {
+    let n = dir;
+    let v: THREE.Vector3 = new THREE.Vector3();
+
+    for (let i = 0; i < this.Guns.length; ++i) {
+      let gun: Object3D = this.Guns[i];
+
+      gun.getWorldPosition(v);
+
+      let b1: Bullet = new Bullet(this, n, this._bulletSpeed, this._damage);
+      b1.position.copy(v);
+    }
+  }
   public moveLeft(dt: number) {
     this.position.x -= this._strafeSpeed * dt;
     // if (g_input.keyboard.a.pressed()) {
@@ -873,24 +1017,28 @@ class Ship extends PhysicsObject {
     this._movedDown = this._movedLeft = this._movedRight = this._movedUp = false;
   }
 }
+
 class WaitTimer {
   private _time: number = 2;
   private _maxtime: number = 2;
+  get interval(): number { return this._maxtime; }
+  set interval(n: number) { this._maxtime = n; }
   get time(): number { return this._time; }
   get time01(): number { return 1 - this._time / this._maxtime; }
 
   public constructor(maxtime: number) {
     this._maxtime = this._time = maxtime;
   }
-  public update(dt: number): void {
+  public update(dt: number): boolean {
     if (this._time > 0) {
       this._time -= dt;
       if (this._time <= 0) {
         this._time = 0;
       }
     }
+    return this.ready();
   }
-  public ready() {
+  public ready(): boolean {
     return this._time <= 0;
   }
   public reset() {
@@ -898,19 +1046,42 @@ class WaitTimer {
   }
 }
 class PlayerShip extends Ship {
-  // private _arms: Array<Arm> = new Array<Arm>();
   public bombs: number = 3;
   public maxbombs: number = 3;
   public score: number = 0;
   public bombTimer: WaitTimer = new WaitTimer(3);
   public bulletTimer: WaitTimer = new WaitTimer(0.2);
-  public gun1pos: THREE.Object3D = null;
-  public gun2pos: THREE.Object3D = null;
+  public ShipLevel: number = 1;
+
   public constructor() {
-    super();
+    super(Files.Model.Player_Ship, function (that: PhysicsObject, m: THREE.Mesh) {
+      that.Color = (that as PlayerShip).getColorForShipLevel((that as PlayerShip).ShipLevel);
+    });
+
+    let that = this;
+
+    this._bulletSpeed = 90;
+
+    //Set the collision routine.
     this.Collide = function (b: PhysicsObject) {
       if (g_isgameover == false) {
-        if (b instanceof EnemyShip) {
+        if (b instanceof Bullet) {
+          if ((b as Bullet).Firer instanceof EnemyShip) {
+
+            this._health -= (b as Bullet).Damage;
+            g_audio.play(Files.Audio.Ship_Hit);
+            g_physics.destroy(b);
+            g_particles.createShipHitParticles(this.WorldPosition);
+          }
+        }
+        else if (b instanceof EnemyShip) {
+          g_particles.createShipHitParticles(this.position);
+          g_particles.createShipDieParticles(this.position);
+          g_audio.play(Files.Audio.Ship_Hit);
+          this._health -= 100;
+          b.destroy();
+        }
+        else if (b instanceof Boss) {
           g_particles.createShipHitParticles(this.position);
           g_particles.createShipDieParticles(this.position);
           g_audio.play(Files.Audio.Ship_Hit);
@@ -923,12 +1094,66 @@ class PlayerShip extends Ship {
           g_audio.play(Files.Audio.Ship_Explode);
 
           stopGame();
-
-          //g_gameovertimer.
         }
       }
     };
   }
+
+  public levelUp(): void {
+    this.ShipLevel += 1;
+    this.Color = this.getColorForShipLevel(this.ShipLevel);
+
+    if (this.ShipLevel === 1) {
+      this._damage = 10;
+    }
+    else if (this.ShipLevel === 2) {
+      this._damage = 20;
+    }
+    else if (this.ShipLevel === 3) {
+      this._damage = 30;
+    }
+    else {
+      this._damage = this.ShipLevel * 2 * 10;
+    }
+
+    g_audio.play(Files.Audio.LevelUp);
+  }
+
+  public getColorForShipLevel(level: number): Vector3 {
+    let color: Vector3 = new Vector3(1, 1, 1);
+    if (level === 1) {
+      color = new Vector3(0.2, 0.4, 1);
+    }
+    else if (level === 2) {
+      color = new Vector3(0.2, 1, 0.3);
+    }
+    else if (level === 3) {
+      color = new Vector3(1, 0.5, 0.2);
+    }
+    else if (level === 4) {
+      color = new Vector3(0, 0.5, 1.0);
+    }
+    else if (level === 5) {
+      color = new Vector3(0.7, 0.1, 0.3);
+    }
+    else if (level === 6) {
+      color = new Vector3(1, 0.0, 0.0);
+    }
+    else if (level === 7) {
+      color = new Vector3(0.48, 0.4, 1.0);
+    }
+    else if (level === 8) {
+      color = new Vector3(0.45, 0.45, 0.12);
+    }
+    else if (level === 9) {
+      color = new Vector3(1, 1, 1);
+    }
+    else if (level === 10) {
+      color = new Vector3(.1, .1, .2);
+    }
+    return color;
+  }
+
   private _nresetclick = 0;
   public update(dt: number) {
     if (g_isgameover == false) {
@@ -971,20 +1196,11 @@ class PlayerShip extends Ship {
   }
   private tryFireBullet(): void {
     if (this.bulletTimer.ready()) {
+
+      //n.negate();
       let n = new THREE.Vector3();
       camera.getWorldDirection(n);
-      //n.negate();
-
-
-      let v: THREE.Vector3 = new THREE.Vector3();
-
-      g_player.gun1pos.getWorldPosition(v);
-      let b1: Bullet = new Bullet(n);
-      b1.position.copy(v);
-
-      g_player.gun2pos.getWorldPosition(v);
-      let b2: Bullet = new Bullet(n);
-      b2.position.copy(v);
+      this.fireBullets(n);
 
       g_audio.play(Files.Audio.Shoot);
       this.bulletTimer.reset();
@@ -1000,7 +1216,7 @@ class PlayerShip extends Ship {
 
         //shoot from gun1, why not?
         let v: THREE.Vector3 = new THREE.Vector3();
-        g_player.gun1pos.getWorldPosition(v);
+        this.Guns[0].getWorldPosition(v);
         b1.position.copy(v);
 
         g_audio.play(Files.Audio.Bomb_Shoot);
@@ -1017,101 +1233,267 @@ class PlayerShip extends Ship {
 }
 class EnemyShip extends Ship {
   private _droprate: number = 0;
-  public constructor(model: THREE.Object3D, droprate: number) {
-    super();
+  private _fireTimer: Timer = null;
+  private _fireTime: number = 10000;
+  private _points: number = 0;
+  private _numdrops: number = 0;
+  get Points(): number { return this._points; }
+
+  private dropItem() {
+    //Item Drops:
+    //If the player is deficient then have a 20% chance to drop levels, else drop supplies.
+    //Otherwise only drop levels, we have all our supplies.
+    let playerDeficient: boolean = g_player.health < g_player.maxhealth || g_player.bombs < g_player.maxbombs;
+    let isLevelItem: boolean = playerDeficient ? (Random.float(0, 1) > 0.8) : true;
+
+    let drop = (1.0 - this._droprate * 0.01);
+    if (Random.float(0, 1) >= drop) {
+      let item = new Item(isLevelItem);
+      //place item random position around ship, because there might be more than 1 item.
+      item.position.copy(this.position.clone().add(Random.randomNormal().multiplyScalar(2)));
+    }
+  }
+
+  public constructor(model: Files.Model, health: number, droprate: number, numdrops: number, firetime: number, points: number) {
+    super(model, function () { });
+    let that = this;
+    this._fireTime = firetime;
+    this._points = points;
+
+    this.health = health;
+    this._numdrops = numdrops;
 
     this._droprate = droprate;//% chance of a drop.
 
-    if (model) {
-      this.setModel(model);
-    }
-    else {
-      //Error
-      Globals.logError("Error loading enemy ship model. Default model created.");
-      this.setModel(this.createDefaultGeo());
-    }
+    this._fireTimer = new Timer(firetime, function () {
+      that.fire();
+    });
 
     this.Collide = function (b: PhysicsObject) {
       if (b instanceof Bullet) {
-        this._health -= 20;
-        g_audio.play(Files.Audio.Ship_Hit);
-        g_physics.destroy(b);
-        g_particles.createShipHitParticles(this.WorldPosition);
+        if ((b as Bullet).Firer instanceof PlayerShip) {
+
+          that.health -= (b as Bullet).Damage;
+          g_audio.play(Files.Audio.Ship_Hit);
+          g_physics.destroy(b);
+          g_particles.createShipHitParticles(that.WorldPosition);
+        }
       }
       if (b instanceof BombExplosion) {
-        this._health = 0;
+        that.health -= 100;
       }
       if (b instanceof Bomb) {
       }
 
-      if (this._health <= 0) {
-        this._health = 0;
-        g_particles.createShipDieParticles(this.WorldPosition);
+      if (that.health <= 0) {
+        that.health = 0;
+        g_particles.createShipDieParticles(that.WorldPosition);
         g_audio.play(Files.Audio.Ship_Explode);
 
-        //Drop Item
-        if (g_player.health < g_player.maxhealth || g_player.bombs < g_player.maxbombs) {
-          let drop: number = (1.0 - this._droprate * 0.01);
-          if (Random.float(0, 1) >= drop) {
-            let item = new Item();
-            item.position.copy(this.position);
-          }
+        //Drop stuff
+        for (let i = 0; i < that._numdrops; ++i) {
+          that.dropItem();
         }
 
         //Incement score
-        g_player.score += 1;
+        g_player.score += that.Points;
 
         //Kill it
-        this.destroy();
+        that.destroy();
       }
     };
 
   }
-  private createDefaultGeo(): THREE.Mesh {
-    var geo = new THREE.BoxBufferGeometry(.3, .03, .2);
-    geo.computeBoundingBox(); // for hit area
-    var mat = new THREE.MeshBasicMaterial({
-      //map: this._texture,
-      transparent: false,
-      side: THREE.DoubleSide,
-      color: 0x9FC013,
-    });
-    geo.computeBoundingBox();
 
-    let mesh: THREE.Mesh = new THREE.Mesh(geo, mat);
-    mesh.scale.set(Random.float(0.8, 5), Random.float(0.8, 2), Random.float(0.8, 2));
+  private fire() {
 
-    return mesh;
+    let dir: Vector3 = new Vector3();
+
+    //Point the bullet a ways away from the player for the effect of "trying" to shoot player.
+    let v: Vector3 = g_player.WorldPosition.clone();
+
+    dir.copy(v.sub(new Vector3(0, 0, Random.float(0, 1) * g_player.Velocity.z * 1.5)));
+
+    dir.sub(this.WorldPosition);
+    dir.normalize();
+
+    this.fireBullets(dir);
+    this._fireTimer.Interval = 3000 + Random.float(2000, 5000);
   }
+  public update(dt: number) {
+    super.update(dt);
+    this._fireTimer.update(dt);
+  }
+}
+/**
+ * The boss has 3 states.
+ * 1. rotate towards player slowly, & fire slowly
+ * 2. spin around and fire a ton of missiles for 4 seconds.
+ * 3. cooldown.
+ */
+enum BossState { None, Fire, Spin, Cooldown }
+class Boss extends EnemyShip {
+
+  private _gunTimers: Array<Timer> = new Array<Timer>();
+
+  private _rotz = 0;
+
+  private _stateTimer: WaitTimer = new WaitTimer(15);
+  private _eState: BossState = BossState.Fire;
+  private _posSaved: Vector3 = new Vector3();
+
+  public constructor() {
+    super(Files.Model.Boss, 2000, 100, 3, -1, 100);
+
+    this.health = 1000;
+    this.Collide = function (b: PhysicsObject) {
+      if (b instanceof Bullet) {
+        if ((b as Bullet).Firer instanceof PlayerShip) {
+          this._health -= (b as Bullet).Damage;
+          g_audio.play(Files.Audio.Ship_Hit);
+          g_physics.destroy(b);
+          g_particles.createShipHitParticles(this.WorldPosition);
+        }
+      }
+      if (this._health <= 0) {
+        this._health = 0;
+        g_particles.createBossDieParticles(this.WorldPosition);
+        g_audio.play(Files.Audio.Ship_Explode);
+        this.destroy();
+        exitBoss();
+      }
+    }
+
+    this.Destroy = function () {
+      let x = this.position.z - g_player.position.z;
+      if (x > 20) {
+        let n = 0;
+        n++;
+      }
+      return x > 20;
+    }
+    this.OnDestroy = function (ob: PhysicsObject) {
+      exitBoss();
+    }
+  }
+  public update(dt: number) {
+    super.update(dt);
+    this.updateState(dt);
+    this.perform(dt);
+  }
+  private updateState(dt: number) {
+    if (this._stateTimer.update(dt)) {
+      if (this._eState === BossState.Fire) {
+        //reset transform.
+        this._posSaved.copy(this.position);
+        this._eState = BossState.Spin;
+        this._stateTimer.interval = 7;//spin 7s
+      }
+      else if (this._eState === BossState.Spin) {
+        this._eState = BossState.Cooldown;
+        this._stateTimer.interval = 12;//cooldown 12s
+      }
+      else if (this._eState === BossState.Cooldown) {
+        //Restore state
+        this._eState = BossState.Fire;
+        this.position.copy(this._posSaved);
+        this.scale.set(1, 1, 1);
+        this._stateTimer.interval = 12; // fire 12s
+      }
+      else {
+        Globals.logError("Undefined boss state. " + this._eState);
+      }
+      this._stateTimer.reset();
+    }
+  }
+  private _rz: number = 0;
+  private _rotNormal: Vector3 = new Vector3();
+  private perform(dt: number) {
+    const revspeed = Math.PI * 0.9;
+    const turnspeed = Math.PI * 0.9;
+
+    if (this._eState === BossState.Fire) {
+      //rotate towards player slowly.
+      let want_dir: Vector3 = g_player.WorldPosition.clone().sub(this.WorldPosition.clone()).normalize();
+      let this_dir: Vector3 = new Vector3();
+      this.getWorldDirection(this_dir);
+
+      let rot = Math.acos(want_dir.dot(this_dir));
+      this._rotNormal = this_dir.clone().cross(want_dir.clone()).normalize();
+
+      this._rz += Math.min(rot * dt, turnspeed); //this._rz + turnspeed * dt * (rot < 0 ? -1 : 1);
+      this.rotateOnAxis(this._rotNormal, this._rz);
+    }
+    else if (this._eState === BossState.Spin) {
+      //Rev up
+      this._rz = Math.min(this._rz + revspeed * dt, Math.PI * 3);
+      this.rotateOnAxis(this._rotNormal, this._rz);
+    }
+    else if (this._eState === BossState.Cooldown) {
+      if (this._rz > 0) {
+        //Wind Down
+        this._rz = Math.max(this._rz - revspeed * dt, 0);
+        this.rotateOnAxis(this._rotNormal, this._rz);
+      }
+      else {
+        //Shake in place, squish a litte.
+        this.position.copy(this._posSaved);
+        this.position.add(Random.randomNormal().setZ(this._posSaved.z).multiplyScalar(0.078));
+        let squish: number = 0.983;
+        this.scale.set(Random.float(squish, 1.03), Random.float(squish, 1.03), Random.float(squish, 1.03));
+      }
+    }
+
+
+  }
+
 
 }
 class Projectile extends PhysicsObject {
   private _speed: number = 40;//.4;
-  public constructor(spd: number, direction: Vector3, model: Files.Model) {
+  public Damage: number = 10;
+  public constructor(spd: number, direction: Vector3, model: Files.Model, afterLoad: ModelObjectCallback) {
     super();
 
+    this._afterLoadModel = afterLoad;
+
+    let that = this;
+    g_models.setModelAsyncCallback(model, function (b: THREE.Mesh) {
+      if (b != null) {
+        let b2 = b.clone();
+        that.setModel(b2);
+
+        //that.model.material = b.material.clone();
+
+        that.lookAt(that.position.clone().add(direction));
+
+        if (that._afterLoadModel) {
+          that._afterLoadModel(that, b);
+        }
+      }
+      else {
+        Globals.logError("Could not find model" + model);
+      }
+    });
+
     this.Collide = function () { }//Force object to collide
-
     this._speed = spd;
-    let b = g_models.getModel(model);
-    if (b != null) {
-      let b2 = b.clone();
-      this.setModel(b2);
-
-      this.lookAt(this.position.clone().add(direction));
-    }
-    else {
-      Globals.logError("Could not find model" + model);
-    }
     this.Velocity.copy(direction.clone().multiplyScalar(this._speed));
   }
 }
 class Item extends Projectile {
-  private _health = 5;
-  public constructor() {
-    super(0, new Vector3(0, 0, -1), Files.Model.Item);
+  private _health = 10;
+
+  private _isLevelItem = false;
+
+  public constructor(isLevelItem: boolean) {
+    super(0, new Vector3(0, 0, -1), Files.Model.Item, function () { });
     this.RotationDelta.y = Math.PI * 1.0093;
     let that = this;
+    this._isLevelItem = isLevelItem;
+
+    //fun colors.
+    this.Color = Random.randomColor().clamp(new Vector3(.2, .1, .2), new THREE.Vector3(1, 1, 1));
 
     this.Collide = function (b: PhysicsObject) {
       if (g_isgameover == false) {
@@ -1133,42 +1515,56 @@ class Item extends Projectile {
 
   }
   private giveItem() {
-    g_audio.play(Files.Audio.Get_Item);
     let playership: PlayerShip = g_player;
 
-    //Give player powerup based on what's missing
-    if (playership.bombs === playership.maxbombs) {
-      playership.health = Math.min(playership.health + 10, playership.maxhealth);
-    }
-    else if (playership.health === playership.maxhealth) {
-      playership.bombs = Math.min(playership.bombs + 1, playership.maxbombs);
+    if (this._isLevelItem) {
+      g_player.levelUp();
     }
     else {
-      let r = Random.float(0, 1);
-      if (r > 0.8) {
+      g_audio.play(Files.Audio.Get_Item);
+      //Health/bombs
+      //Give player powerup based on what's missing
+      if (playership.bombs === playership.maxbombs) {
         playership.health = Math.min(playership.health + 10, playership.maxhealth);
       }
-      else {
+      else if (playership.health === playership.maxhealth) {
         playership.bombs = Math.min(playership.bombs + 1, playership.maxbombs);
+      }
+      else {
+        let r = Random.float(0, 1);
+        if (r > 0.8) {
+          playership.health = Math.min(playership.health + 10, playership.maxhealth);
+        }
+        else {
+          playership.bombs = Math.min(playership.bombs + 1, playership.maxbombs);
+        }
       }
     }
     this.destroy();
   }
 }
 class Bullet extends Projectile {
-  public constructor(direction: Vector3) {
-    super(90, direction, Files.Model.Bullet);
-    //this.Opacity = 0.7;
+  public Firer: PhysicsObject = null;
+  public constructor(firer: PhysicsObject, direction: Vector3, spd: number, damage: number) {
+    super(spd, direction, Files.Model.Bullet, function (that: PhysicsObject, m: THREE.Mesh) {
+      if (firer instanceof PlayerShip) {
+        that.Color = g_player.getColorForShipLevel(g_player.ShipLevel);
+      }
+    });
+    let that = this;
+
+    this.Firer = firer;
+    this.Damage = damage;
   }
+
 }
 class Bomb extends Projectile {
   private _boomtimer: WaitTimer = new WaitTimer(2.5);
 
   public constructor(direction: Vector3) {
-    super(55, direction, Files.Model.Bomb);
+    super(55, direction, Files.Model.Bomb, function () { });
     this.RotationDelta.x = Math.PI;
     this.rotation.z = Math.PI;
-
   }
   public update(dt: number) {
     super.update(dt);
@@ -1185,7 +1581,7 @@ class BombExplosion extends Projectile {
   private _dietimer: WaitTimer = new WaitTimer(1.1);
 
   public constructor(dposition: Vector3) {
-    super(0, new Vector3(0, 1, 0), Files.Model.Bomb_Explosion);
+    super(0, new Vector3(0, 1, 0), Files.Model.Bomb_Explosion, function () { });
     this.position.copy(dposition);
   }
   public update(dt: number) {
@@ -1205,99 +1601,7 @@ class BombExplosion extends Projectile {
     }
   }
 }
-// class Arm extends THREE.Object3D {
-//   private _points: THREE.Points = null;
-//   private _armMesh: THREE.Mesh = null;
-//   public Pos: Vector3 = new Vector3();
 
-//   private _aimpoint: Vector3 = new Vector3();
-//   get AimPoint(): Vector3 { return this._aimpoint; }
-//   private _aimnormal: Vector3 = new Vector3();
-//   get AimNormal(): Vector3 { return this._aimnormal; }
-//   public constructor() {
-//     super();
-//     this.createMeshes();
-//   }
-//   public getP0(): Vector3 {
-//     return this.getPoint(0);
-//   }
-//   public getP1(): Vector3 {
-//     return this.getPoint(1);
-//   }
-//   public shoot() {
-//     // let b: Bullet = new Bullet(this);
-//   }
-//   public aim(at: Vector3) {
-//     this._aimpoint = at;
-//     //Attempt to rotate FIRST then trnaslate
-//     this.position.set(0, 0, 0);
-//     this.rotation.set(0, 0, 0);
-//     this.updateMatrix();
-//     this.position.set(this.Pos.x, this.Pos.y, this.Pos.z);
-//     this.updateMatrix();
-
-//     let wp = new Vector3();
-//     this.getWorldPosition(wp);
-
-//     let world_pt = wp;//wp.clone().add(this.getP0());
-
-//     this._aimnormal = at.clone().sub(world_pt);
-//     this._aimnormal.normalize();
-//     var left = this._aimnormal.clone().cross(this.up).normalize();
-
-//     var amt = Math.acos(this.up.dot(this._aimnormal));
-
-//     this.rotateOnAxis(left, amt);
-//   }
-//   private getPoint(idx: number): Vector3 {
-//     if (idx <= 1) {
-//       if (this._points) {
-//         if (this._points.geometry) {
-//           let g: THREE.Geometry = this._points.geometry as THREE.Geometry;
-//           if (g && g.vertices && g.vertices.length >= 2) {
-//             return g.vertices[idx];
-//           }
-//         }
-//       }
-//     }
-//     return null;
-//   }
-//   private createMeshes(): void {
-//     var xy = 0.02;
-//     var z = 1.7;
-//     //create Arms
-
-//     //https://threejs.org/examples/?q=points#webgl_custom_attributes_points
-//     // Contact points for the mesh.
-//     let p0: Vector3 = new Vector3(0, 0, -z / 2);
-//     let p1: Vector3 = new Vector3(0, 0, z / 2);
-//     let points_geo: THREE.Geometry = new THREE.Geometry();
-//     points_geo.vertices.push(p0);
-//     points_geo.vertices.push(p1);
-//     var pointMaterial = new THREE.PointsMaterial({ color: 0xFF0000, size: 0.1 });
-//     this._points = new THREE.Points(points_geo, pointMaterial);
-//     this
-//     this.add(this._points);
-
-//     //Arm.  TODO: later we load this in
-//     var arm_geo = new THREE.BoxBufferGeometry(xy, xy, z);
-//     arm_geo.computeBoundingBox(); // for hit area
-//     var arm_mat = new THREE.MeshBasicMaterial({
-//       //map: this._texture,
-//       transparent: false,
-//       side: THREE.DoubleSide,
-//       color: 0xF0FFF0,
-//     });
-//     this._armMesh = new THREE.Mesh(arm_geo, arm_mat);
-//     this.add(this._armMesh);
-
-//     //move pivots
-//     //   this._armMesh.translateZ(z / 2);
-//     //   this._points.translateZ(z / 2);
-
-//     this._points.visible = Globals.isDebug();//Not sure if this will actually stop update the points.
-//   }
-// }
 class Random {
   // private static _random: Mersenne = new Mersenne();
   public static float(min: number, max: number) {
@@ -1305,6 +1609,9 @@ class Random {
     let n = Math.random();
     let n2 = min + (max - min) * n;
     return n2;
+  }
+  public static randomColor(): Vector3 {
+    return this.randomNormal().multiplyScalar(2).subScalar(1);
   }
   public static randomNormal(): Vector3 {
     let v: Vector3 = new Vector3();
@@ -1320,36 +1627,97 @@ class Random {
   }
 }
 class Starfield extends THREE.Object3D {
+  // private _starMesh: THREE.Mesh = null;
+  //Stars relative to player.
+  private _starScale: IAFloat = new IAFloat(0.2, 2);
+  private _starBox: IAVec3 = new IAVec3(new Vector3(-900, -900, -900), new THREE.Vector3(900, 900, 600));
+  //Area around player we don't want to make stars
+  private _nogo: THREE.Box3 = new THREE.Box3(new Vector3(-200, -200, -200), new Vector3(200, 200, 200));
+  private _maxStars: number = 300;
+  private _stars: Array<THREE.Mesh> = new Array<THREE.Mesh>();
+  get Stars(): Array<THREE.Mesh> { return this._stars; }
   public constructor() {               //rtop rbottom height rsegments hsegments openended
     super();
 
-    var geo = new THREE.CylinderGeometry(20, 20, 100, 32, 1, true);
-    var texture = THREE.ImageUtils.loadTexture('./dat/img/starfield_1.png');
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(10, 3);
-    var mat = new THREE.MeshLambertMaterial({ map: texture, side: THREE.DoubleSide, depthTest: false });
-    var mesh = new THREE.Mesh(geo, mat);
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    mesh.position.set(0, 0, 0);
 
-    this.matrixAutoUpdate = false;
-
-    this.add(mesh);
-    //https://discourse.threejs.org/t/always-render-mesh-on-top-of-another/120/4
-    this.renderOrder = 0;//Render this first.
+    //Make a bunch of stars.
+    for (let i = 0; i < this._maxStars; ++i) {
+      this.tryMakeStar(true);
+    }
   }
-  private _z: number = 0;
   public update(dt: number) {
-    this._z = (this._z + Math.PI * dt * 0.15) % (Math.PI * 2);
-    this.rotation.x = Math.PI * 0.5;
-    this.updateMatrix();
-    this.rotation.y = this._z;
-    this.updateMatrix();
+    //Check for dead stars.
+    for (let iStar = this._stars.length - 1; iStar >= 0; iStar--) {
+      let star: THREE.Mesh = this._stars[iStar];
+      if (star.position.z - g_player.position.z >= 20) {
+        this._stars.splice(iStar, 1);
+        g_physics.Scene.remove(star);
+      }
+    }
+
+    //Make new stars
+    if (this._stars.length < this._maxStars) {
+      let num = this._maxStars - this._stars.length;
+      for (let iStar = 0; iStar < num; ++iStar) {
+        this.tryMakeStar(false);
+      }
+    }
+
   }
-}
-class RenderManager {
+  private tryMakeStar(z: boolean) {
+    let star: THREE.Mesh = null;
+    let pos: Vector3 = new Vector3();
+
+    //Try to make a star.
+    // Do not make stars too close to player (the nogo box)
+    //try 1000 times, else, just quit, we'll try again next frame.
+    //not precise but.. meh, they're decoration.
+    let player_pos: Vector3 = g_player.WorldPosition.clone();
+    for (let iTry = 0; iTry < 255; ++iTry) {
+      pos = this._starBox.calc();
+      if (z == false) {
+        //If z is false, place the star at the edge of the player's view, which is negative
+        pos.z = this._starBox.Min.z;
+      }
+      if (this._nogo.containsPoint(pos)) {
+        continue;
+      }
+      else {
+        pos.add(player_pos);
+        star = this.makeStar(pos);
+        break;
+      }
+    }
+    if (star) {
+      this._stars.push(star);
+      g_physics.Scene.add(star);
+    }
+  }
+  private makeStar(pos: Vector3): THREE.Mesh {
+    let star: THREE.Mesh = null;
+    var geo = new THREE.BoxBufferGeometry(1, 1, 1);
+    var mat = new THREE.MeshBasicMaterial({
+      transparent: false,
+      side: THREE.FrontSide,
+      color: 0xFFFFFF,
+    });
+
+    star = new THREE.Mesh(geo, mat);
+    star.position.copy(pos);
+    let s: number = this._starScale.calc();
+    star.scale.set(s, s, s);
+    let c: THREE.Color = new THREE.Color();
+    let r: number = Random.float(0, 1);
+    if (r > 0.9) { c.r = 158 / 255; c.g = 231 / 255; c.b = 254 / 255; }//light blue
+    else if (r > 0.4) { c.r = 254 / 255; c.g = 255 / 255; c.b = 240 / 255; }//yellow
+    else if (r > 0.3) { c.r = 123 / 255; c.g = 165 / 255; c.b = 234 / 255; }
+    else if (r > 0.2) { c.r = 48 / 255; c.g = 48 / 255; c.b = 235 / 255; }//blu
+    else if (r > 0.1) { c.r = 234 / 255; c.g = 156 / 255; c.b = 250 / 255; }//pinkish
+    else if (r >= 0.0) { c.r = 252 / 255; c.g = 203 / 255; c.b = 112 / 255; }//orangish
+    (star.material as THREE.MeshBasicMaterial).color.set(c);
+    return star;
+  }
+
 }
 /**
  * Manages Audio using the THREE WebAudio interface
@@ -1410,36 +1778,53 @@ class AudioManager {
     });
   }
 }
+interface ModelCallback { (model: THREE.Mesh): void; };
+interface ModelObjectCallback { (object: PhysicsObject, model: THREE.Mesh): void; };
 class ModelManager {
+
   private _cache: Dictionary<THREE.Object3D> = {};
+  private _modelBaseDir: string = './dat/model/';
+
+  private _callbacks: Dictionary<Array<ModelCallback>> = {}
+
   constructor() {
     this.loadModels();
   }
-  public getModel(model: Files.Model): THREE.Object3D {
-    let szfile = './dat/model/' + model;
+  public setModelAsyncCallback(model: Files.Model, callback: ModelCallback): void {
+    let szfile = this._modelBaseDir + model;
 
     if (szfile in this._cache) {
-      return this._cache[szfile];
+      let m: THREE.Mesh = this._cache[szfile] as THREE.Mesh;
+      callback(m);
     }
     else {
-      Globals.logError("Model " + szfile + " was not loaded.");
-      return null;
+      if (!this._callbacks[szfile]) {
+        this._callbacks[szfile] = new Array<any>();
+      }
+      this._callbacks[szfile].push(callback);
     }
   }
   private loadModels(): void {
     let that = this;
-    this.loadModel(Files.Model.Player_Ship, ['Player_Ship', 'Player_Seat', 'Gun1', 'Gun2'], function (success: boolean, objs: any, gltf: any) {
+    // this.loadShip(Files.Model.Player_Ship, ['Player_Seat'], function (success: boolean, ship: Object3D, objs: any, gltf: any) {
+    //   let player_pos = objs['Player_Seat'].position;
+    //   user.position.copy(player_pos);
+    //   return ship;
+    // });
+    this.loadModel(Files.Model.Boss, ['MainObject'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
-        let player_ship: THREE.Object3D = objs['Player_Ship'];
-        player_ship.scale.set(.6, .6, .6);
-        g_player.setModel(player_ship);
-        g_player.gun1pos = new THREE.Object3D();
-        g_player.gun1pos.position.copy(objs['Gun1'].position);
-        player_ship.add(g_player.gun1pos);
+        let boss: THREE.Object3D = objs['MainObject'];
+        boss.scale.set(.6, .6, .6);
 
-        g_player.gun2pos = new THREE.Object3D();
-        g_player.gun2pos.position.copy(objs['Gun2'].position);
-        player_ship.add(g_player.gun2pos);
+        return boss;
+      }
+      return null;
+
+    });
+    this.loadModel(Files.Model.Player_Ship, ['MainObject', 'Player_Seat', 'Gun1', 'Gun2'], function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let player_ship: THREE.Object3D = objs['MainObject'];
+        player_ship.scale.set(.6, .6, .6);
 
         let player_pos = objs['Player_Seat'].position;
         user.position.copy(player_pos);
@@ -1447,33 +1832,16 @@ class ModelManager {
       }
       return null;
     });
-    this.loadModel(Files.Model.Enemy_Ship, ['Enemy_Ship'], function (success: boolean, objs: any, gltf: any) {
+
+    this.loadShip(Files.Model.Enemy_Ship);
+
+    this.loadShip(Files.Model.Enemy_Ship2);
+
+    this.loadShip(Files.Model.Enemy_Ship3);
+
+    this.loadModel(Files.Model.Bullet, ['MainObject'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
-        let enemy_ship: THREE.Object3D = objs['Enemy_Ship'];
-        enemy_ship.scale.set(.6, .6, .6);
-        return enemy_ship;
-      }
-      return null;
-    });
-    this.loadModel(Files.Model.Enemy_Ship2, ['Enemy_Ship2'], function (success: boolean, objs: any, gltf: any) {
-      if (success) {
-        let enemy_ship: THREE.Object3D = objs['Enemy_Ship2'];
-        enemy_ship.scale.set(.6, .6, .6);
-        return enemy_ship;
-      }
-      return null;
-    });
-    this.loadModel(Files.Model.Enemy_Ship3, ['Enemy_Ship3'], function (success: boolean, objs: any, gltf: any) {
-      if (success) {
-        let enemy_ship: THREE.Object3D = objs['Enemy_Ship3'];
-        enemy_ship.scale.set(.6, .6, .6);
-        return enemy_ship;
-      }
-      return null;
-    });
-    this.loadModel(Files.Model.Bullet, ['Bullet'], function (success: boolean, objs: any, gltf: any) {
-      if (success) {
-        let a: THREE.Object3D = objs['Bullet'];
+        let a: THREE.Object3D = objs['MainObject'];
         a.scale.set(.6, .6, .6);
         let b = a as THREE.Mesh;
         if (b) {
@@ -1486,9 +1854,9 @@ class ModelManager {
       }
       return null;
     });
-    this.loadModel(Files.Model.Bomb, ['Bomb'], function (success: boolean, objs: any, gltf: any) {
+    this.loadModel(Files.Model.Bomb, ['MainObject'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
-        let a: THREE.Object3D = objs['Bomb'];
+        let a: THREE.Object3D = objs['MainObject'];
         a.scale.set(.6, .6, .6);
         let b = a as THREE.Mesh;
         if (b) {
@@ -1501,9 +1869,9 @@ class ModelManager {
       }
       return null;
     });
-    this.loadModel(Files.Model.Bomb_Explosion, ['Bomb_Explosion'], function (success: boolean, objs: any, gltf: any) {
+    this.loadModel(Files.Model.Bomb_Explosion, ['MainObject'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
-        let a: THREE.Object3D = objs['Bomb_Explosion'];
+        let a: THREE.Object3D = objs['MainObject'];
         a.scale.set(.6, .6, .6);
         let b = a as THREE.Mesh;
         if (b) {
@@ -1516,9 +1884,9 @@ class ModelManager {
       }
       return null;
     });
-    this.loadModel(Files.Model.Item, ['Item'], function (success: boolean, objs: any, gltf: any) {
+    this.loadModel(Files.Model.Item, ['MainObject'], function (success: boolean, objs: any, gltf: any) {
       if (success) {
-        let a: THREE.Object3D = objs['Item'];
+        let a: THREE.Object3D = objs['MainObject'];
         a.scale.set(1.5, 1.5, 1.5);
         let b = a as THREE.Mesh;
         if (b) {
@@ -1532,14 +1900,46 @@ class ModelManager {
       return null;
     });
   }
+  private loadShip(mod: Files.Model, szobjs: Array<string> = null, loaded: any = null): void {
+    let arr2 = null;
+    let arr = ['MainObject'];
+    if (szobjs != null) {
+      arr2 = szobjs;
+      arr2.concat(arr);
+    }
+    else {
+      arr2 = arr;
+    }
+
+    this.loadModel(mod, arr2, function (success: boolean, objs: any, gltf: any) {
+      if (success) {
+        let ship: THREE.Object3D = objs['MainObject'];
+        ship.scale.set(.6, .6, .6);
+
+        if (loaded) {
+          loaded(success, ship, objs, gltf);
+        }
+        return ship;
+      }
+      else {
+        if (loaded) {
+          loaded(success, null, objs, gltf);
+        }
+        return null;
+      }
+    });
+  }
   private loadModel(filename: string, obj_names_in_scene: Array<string>, afterLoad: any) {
+    Globals.logDebug('loading model "' + filename + '".')
     let that = this;
     let loader = new GLTFLoader_.GLTFLoader();
-    let szfile = './dat/model/' + filename;
+    let szfile = this._modelBaseDir + filename;
     loader.load(
       szfile,
       function (gltf: any) {
         let success: boolean = true;
+
+        //Grab a list of named objects the user requested. (why? we could just traverse the graph)
         let arrobjs: any = [];
         for (let i = 0; i < obj_names_in_scene.length; i++) {
           let sz = obj_names_in_scene[i];
@@ -1553,15 +1953,25 @@ class ModelManager {
             arrobjs[sz] = obj;
           }
         }
-        if (afterLoad) {
-          let obj = afterLoad(success, arrobjs, gltf);
-          if (obj == null) {
-            Globals.logError("loaded model was null, model must be returned from closure");
-          }
-          else {
-            that._cache[szfile] = obj;
-          }
+
+        //Call the after load lambda
+        let obj = afterLoad(success, arrobjs, gltf);
+        if (obj == null) {
+          Globals.logError("loaded model was null, model must be returned from closure");
         }
+        else {
+          that._cache[szfile] = obj;
+        }
+
+        //Invoke callbacks to set models async
+        if (that._callbacks[szfile] != null) {
+          let mesh = obj as THREE.Mesh; // Must cast to mesh
+          for (let ci = 0; ci < that._callbacks[szfile].length; ci--) {
+            that._callbacks[szfile][ci](mesh);
+          }
+          that._callbacks[szfile] = null;
+        }
+        Globals.logDebug('...loaded model "' + filename + '" -- success.');
       },
       function (xhr: any) {
         Globals.logInfo('model ' + (xhr.loaded / xhr.total * 100).toFixed(2) + '% loaded.');
@@ -1571,6 +1981,7 @@ class ModelManager {
       }
     );
   }
+
 }
 class IAFloat {
   public Min: number = 0;
@@ -1600,18 +2011,22 @@ class IAVec3 {
 }
 class ParticleParams {
   public Count: number = 10;
-  public Speed: number = 70; //m/s
+  public Speed: IAFloat = new IAFloat(70,70); //m/s
   public Position: Vector3 = new Vector3();
   public Scale: Vector3 = new Vector3(0, 0, 0);
   public InitialScale: IAVec3 = new IAVec3(new Vector3(1, 1, 1), new Vector3(1, 1, 1));
   public Rotation: Vector3 = new Vector3(0, 0, 0);
   public Color: IAVec3 = new IAVec3(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
+  public Opacity: IAFloat = new IAFloat(0,0);
 }
 class Particle extends PhysicsObject {
-  public constructor(m: THREE.Mesh) {
+  public constructor(m: THREE.Mesh) {//file:Files.Model) {
     super();
+    // let that =this;
+    // g_models.setModelAsyncCallback(file, function(m: THREE.Mesh){
     let b2 = m.clone();
     this.setModel(b2);
+    //});
   }
 }
 class Particles {
@@ -1634,13 +2049,33 @@ class Particles {
   public create(params: ParticleParams) {
     for (let i = 0; i < params.Count; ++i) {
       let p = new Particle(this._mesh);
-      p.Velocity = Random.randomNormal().multiplyScalar(params.Speed);
+      p.Velocity = Random.randomNormal().multiplyScalar(params.Speed.calc());
       p.RotationDelta.copy(params.Rotation);
       p.ScaleDelta.copy(params.Scale);
       p.position.copy(params.Position);
       p.Color = params.Color.calc();
       p.scale.copy(params.InitialScale.calc());
+      p.OpacityDelta = params.Opacity.calc();
     }
+  }
+  public createBossDieParticles(pos: Vector3) {
+    let params: ParticleParams = new ParticleParams();
+    params.Count = 150;
+    params.Position.copy(pos);
+    params.Rotation.x = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
+    params.InitialScale.Min.set(0.5,0.5,0.5);
+    params.InitialScale.Max.set(4,4,4);
+    params.Scale.x =
+    params.Scale.y = 
+    params.Scale.z = Random.float(-0.3, -0.2);
+    params.Speed.Max = 0.2;
+    params.Speed.Min = 100;//Random.float(10, 100);
+    params.Color.Min.set(0.1, 0.1, 0.2);
+    params.Color.Max.set(0.3, 1, 1.0);
+    params.Opacity.Max = params.Opacity.Min = -0.1;//(-0.1,-0.1);
+    this.create(params);
   }
   public createShipDieParticles(pos: Vector3) {
     let params: ParticleParams = new ParticleParams();
@@ -1650,7 +2085,7 @@ class Particles {
     params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
-    params.Speed = Random.float(10, 100);
+    params.Speed.Max = params.Speed.Min = Random.float(10, 100);
     params.Color.Min.set(0.7, 0.7, 0);
     params.Color.Max.set(1, 1, 0);
     this.create(params);
@@ -1663,7 +2098,7 @@ class Particles {
     params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
-    params.Speed = Random.float(10, 40);
+    params.Speed.Max = params.Speed.Min = Random.float(10, 40);
     params.Color.Min.set(0.3, 0.3, 0.7);
     params.Color.Max.set(0.3, 0.3, 1);
     this.create(params);
@@ -1676,7 +2111,7 @@ class Particles {
     params.Rotation.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation.z = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Scale.x = params.Scale.y = params.Scale.z = Random.float(-2, -0.3);
-    params.Speed = Random.float(40, 100);
+    params.Speed.Max = params.Speed.Min = Random.float(40, 100);
     params.Color.Min.set(0.6, 0, 0);
     params.Color.Max.set(1, 0, 0);
     params.InitialScale.Min.set(0.9, 0.9, 0.9);
@@ -1684,6 +2119,11 @@ class Particles {
     this.create(params);
   }
 }
+
+enum GameState { Title, Play, GameOver }
+let g_gameState: GameState = GameState.Title;
+
+let g_gameTitle: string = $('gametitle').text();
 
 let g_input: Input = null;
 let g_pointlight: THREE.PointLight = null;
@@ -1696,8 +2136,7 @@ let g_physics: PhysicsManager = null;
 
 let renderer: THREE.WebGLRenderer = null;
 let gui: dat.GUI = null;
-let score: TextCanvas = null;
-let g_bombs: TextCanvas = null;
+
 let axis: THREE.AxesHelper = null;
 let user: THREE.Group = null;
 let g_shipTimer: Timer = null;
@@ -1706,10 +2145,40 @@ let g_audio: AudioManager = null;
 let g_models: ModelManager = null;
 let g_screen: Screen = null;
 let g_particles: Particles = null;
-let g_music: THREE.Audio = null;
+//let g_mainMusic: THREE.Audio = null;
+//let g_bossMusic: THREE.Audio = null;
+let g_bossTimer: Timer = null;
+let g_starfield: Starfield = null;
 
+class AsyncMusic {
+  public audio : THREE.Audio = null;
+  public stopped : boolean = false;
+  public constructor(a:THREE.Audio){
+    this.audio = a;
+  }
+  public stop() { 
+    if(this.audio && this.audio.source){
+      this.audio.stop();
+    }
+  }
+  public play(){
+    if(this.audio && this.audio.source){
+      this.audio.play();
+    }
+  }
+}
+
+let g_score: TextCanvas = null;
+let g_stats: TextCanvas = null;
+let g_titleHeader: TextCanvas = null;
+let g_titleSub: TextCanvas = null;
 let g_gameover: TextCanvas = null;
+let g_allTextObjects: Array<TextCanvas> = new Array<TextCanvas>();
 let g_isgameover: boolean = false;
+let g_music: Dictionary<AsyncMusic> = {};
+
+let g_mainMusicFile: Files.Audio = Files.Audio.Electro_Sketch;
+let g_bossMusicFile: Files.Audio = Files.Audio.Moskito;
 
 // https://threejsfundamentals.org/threejs/lessons/threejs-custom-geometry.html
 // https://threejsfundamentals.org/threejs/lessons/threejs-webvr.html
@@ -1769,69 +2238,209 @@ function initGame(): void {
   createCamera();
 
   g_audio = new AudioManager();
-
-  makeGui();
-
   g_models = new ModelManager();
-
-  createUIText();
-
   g_particles = new Particles();
 
+  makeGui();
 
   if (Globals.isDebug()) {
     axis = new THREE.AxesHelper(1);
     g_physics.Scene.add(axis);
-
   }
 
-  loadMusic();
+  //loadMusic();
 
-  startGame();
+  createPlayer();
+
+  showTitle();
+
+  listenForGameStart();
+
+  // startGame();
+
+  g_starfield = new Starfield();
 
   renderLoop();
 }
-function loadMusic() {
-  let music_file = './dat/audio/' + Files.Audio.Electro_Sketch;
-  g_audio._audioLoader.load(music_file, function (buffer: THREE.AudioBuffer) {
-    g_music = new THREE.Audio(g_audio._listener);
-    g_music.setBuffer(buffer);
-    g_music.setLoop(true);
-    g_music.setVolume(1);
-    g_music.play();
-  }, function (xhr: any) {
-    Globals.logDebug(" " + music_file + " loading " + xhr)
-  }, function (err: any) {
-    Globals.logError('Error loading  sound ' + music_file + " : " + err);
-  });
+
+
+interface AfterLoadMusicCallback { (audio: THREE.Audio): void; }
+function playMusic(file: Files.Audio) {
+  let audio_root: string = './dat/audio/';
+  let music_file = audio_root + file;
+
+  if (file in g_music && g_music[file] && g_music[file].audio && g_music[file].audio.source) {
+    g_music[file].stop();
+    g_music[file].play();
+  }
+  else {
+    //Lost sound handle, reload.
+    g_audio._audioLoader.load(music_file, function (buffer: THREE.AudioBuffer) {
+      let ret: THREE.Audio = null;
+      ret = new THREE.Audio(g_audio._listener);
+      ret.setBuffer(buffer);
+      ret.setLoop(true);
+      ret.setVolume(1);
+      ret.play();
+      g_music[file] = new AsyncMusic(ret);
+    }, function (xhr: any) {
+      Globals.logDebug(" " + music_file + " loading " + xhr)
+    }, function (err: any) {
+      Globals.logError('Error loading  sound ' + music_file + " : " + err);
+    });
+  }
+}
+function stopMusic(file: Files.Audio) {
+  if (file in g_music) {
+    let audio : AsyncMusic = g_music[file];
+    if (audio && audio.audio && audio.audio.source) {
+      audio.stop();
+    }
+    else {
+      g_music[file] = null;
+    }
+  }
+
+}
+// function loadMusic() {
+//   let audio_root: string = './dat/audio/';
+//   //World
+//   {
+//     let music_file = audio_root + Files.Audio.Electro_Sketch;
+//     g_audio._audioLoader.load(music_file, function (buffer: THREE.AudioBuffer) {
+//       g_mainMusic = new THREE.Audio(g_audio._listener);
+//       g_mainMusic.setBuffer(buffer);
+//       g_mainMusic.setLoop(true);
+//       g_mainMusic.setVolume(1);
+//     }, function (xhr: any) {
+//       Globals.logDebug(" " + music_file + " loading " + xhr)
+//     }, function (err: any) {
+//       Globals.logError('Error loading  sound ' + music_file + " : " + err);
+//     });
+//   }
+
+//   //Boss
+//   {
+//     let music_file = audio_root + Files.Audio.Moskito;
+//     g_audio._audioLoader.load(music_file, function (buffer: THREE.AudioBuffer) {
+//       g_bossMusic = new THREE.Audio(g_audio._listener);
+//       g_bossMusic.setBuffer(buffer);
+//       g_bossMusic.setLoop(true);
+//       g_bossMusic.setVolume(1);
+//     }, function (xhr: any) {
+//       Globals.logDebug(" " + music_file + " loading " + xhr)
+//     }, function (err: any) {
+//       Globals.logError('Error loading  sound ' + music_file + " : " + err);
+//     });
+//   }
+// }
+function listenForGameStart() {
+  if (Globals.userIsInVR()) {
+    //TODO:
+  }
+  else {
+
+    document.addEventListener('mousedown', function (e) {
+      if (g_gameState === GameState.Title) {
+        e.preventDefault();
+        if (e.button == 0) {
+          startGame();
+        }
+        else if (e.button == 1) {
+          //middle
+        }
+        else if (e.button == 2) {
+        }
+      }
+    });
+  }
+}
+function createPlayer() {
+
+  g_player = new PlayerShip();
+  g_player.add(user);
+  g_player.up = new Vector3(0, 1, 0);
+  g_player.position.set(0, 0, 10);
+  g_player.Velocity.set(0, 0, -10);
+  g_player.Destroy = function () { /*do not destroy player */ }
+  g_player.rotateY(0);
+
+  createUIText(g_player);
+}
+function showTitle() {
+  g_titleHeader.visible = true;
+  g_titleSub.visible = true;
+
+
 }
 function startGame() {
-  if (g_player.model) {
-    //won't be loaded when starting fresh, but after a Game Over, this will be set
-    g_player.model.visible = true;
-  }
-  g_player.score = 0;
-  g_bombs.visible = true;
+  g_gameState = GameState.Play;
+
+  g_bossTimer = new Timer(60 * 1000, function () {
+    enterBoss();
+  });
+
+  // if (g_player.model) {
+  //won't be loaded when starting fresh, but after a Game Over, this will be set
+  //   g_player.model.visible = true;
+  // }
+  // g_player.score = 0;
+  g_stats.visible = true;
   g_gameover.visible = false;
-  if (g_music && g_music.isPlaying === false) {
-    g_music.play();
+  g_titleSub.visible = false;
+  g_titleHeader.visible = false;
+
+  if (isBossMode()) {
+    exitBoss();
   }
+  stopMusic(g_bossMusicFile);
+  stopMusic(g_mainMusicFile);
+
+  playMusic(g_mainMusicFile);
+
   g_shipTimer = new Timer(3000, function () {
     createEnemies();
   });
   g_isgameover = false;
-  g_player.health = g_player.maxhealth;
-  g_player.bombs = g_player.maxbombs;
+  // g_player.health = g_player.maxhealth;
+  // g_player.bombs = g_player.maxbombs;
 }
 function stopGame() {
+  g_gameState = GameState.GameOver;
   g_player.model.visible = false;
   g_isgameover = true;
   g_gameover.visible = true;
-  g_bombs.visible = false;
-  if(g_music) { 
-    g_music.stop();
-  }
+  g_stats.visible = false;
+  g_audio.play(Files.Audio.GameOver);
+  stopMusic(g_mainMusicFile);
+  stopMusic(g_bossMusicFile);
+  g_bossTimer.stop();
+}
+function isBossMode() {
+  return g_physics.findObjectOfType(function (ob: PhysicsObject) { return ob instanceof Boss; });
+}
+function enterBoss() {
+  g_bossTimer.stop();
+  g_shipTimer.stop();
 
+  g_physics.destroyAllObjects(function (ob: PhysicsObject) { return ob instanceof EnemyShip; });
+
+  stopMusic(g_mainMusicFile);
+  playMusic(g_bossMusicFile);
+
+  let b: Boss = new Boss();
+  b.position.copy(g_player.position.clone().add(new Vector3(0, 0, -140)));
+  //Move the boss backwards so it slowly inches towards the player.
+  b.Velocity.set(0, 0, g_player.Velocity.z + 0.05);
+}
+function exitBoss() {
+  //add 60s for each new boss interval.
+  g_bossTimer.Interval += 60;
+  g_bossTimer.start();
+  g_shipTimer.start();
+
+  stopMusic(g_bossMusicFile);
+  playMusic(g_mainMusicFile);
 }
 
 class ShipProb {
@@ -1840,6 +2449,10 @@ class ShipProb {
   public speed: IAFloat = new IAFloat(0, 1);
   public scale: Vector3 = new Vector3(1, 1, 1);
   public droprate: number = 0;
+  public rotation_delta: IAVec3 = new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0));
+  public firetime: IAFloat = new IAFloat(3000, 5000);
+  public health: number = 10;
+  public points: number = 0;
 }
 function createEnemies() {
   let nShips = 1;
@@ -1847,35 +2460,33 @@ function createEnemies() {
   for (let i = 0; i < nShips; ++i) {
     let ships: Dictionary<ShipProb> = {};
 
-    ships[Files.Model.Enemy_Ship] = { prob: 0.4, speed_base: 20, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3), droprate: 20 };//{prob:0.4};
-    ships[Files.Model.Enemy_Ship2] = { prob: 0.6, speed_base: 15, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 80 };
-    ships[Files.Model.Enemy_Ship3] = { prob: 1.0, speed_base: 25, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 30 };
+    ships[Files.Model.Enemy_Ship] = { prob: 0.4, points: 2, health: 60, speed_base: 13, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3), droprate: 20, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)), firetime: new IAFloat(3000, 5000) };//{prob:0.4};
+    ships[Files.Model.Enemy_Ship2] = { prob: 0.6, points: 4, health: 240, speed_base: 5, speed: new IAFloat(0, 3), scale: new Vector3(1, 1, 1), droprate: 80, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)), firetime: new IAFloat(5000, 9000) };
+    ships[Files.Model.Enemy_Ship3] = { prob: 1.0, points: 3, health: 30, speed_base: 20, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 30, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.2), new Vector3(0, 0, Math.PI * 1.3)), firetime: new IAFloat(1000, 5000) };
 
     let f: number = Random.float(0, 1);
-    let ship: Files.Model = Files.Model.Enemy_Ship;
+    let file: Files.Model = Files.Model.Enemy_Ship;
     let prob_struct: ShipProb = ships[Files.Model.Enemy_Ship];
     for (let i = 0; i < Object.keys(ships).length; i++) {
       let key = Object.keys(ships)[i];
 
       if (ships[key].prob >= f) {
-        ship = key as Files.Model;
+        file = key as Files.Model;
         prob_struct = ships[key];
         break;
       }
     }
-    if (!ship) {
-      ship = Files.Model.Enemy_Ship;
-    }
 
-    //Create enemy ship and 
-    let m: THREE.Mesh = g_models.getModel(ship) as THREE.Mesh;
-    if (m) {
-      let mclone: THREE.Mesh = m.clone();
-      let ship: EnemyShip = new EnemyShip(mclone, prob_struct.droprate);
-      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-20, 20), Random.float(-13, 23), -200)));
+    try {
+      let ship: EnemyShip = new EnemyShip(file, prob_struct.health, 1,  prob_struct.droprate, prob_struct.firetime.calc(), prob_struct.points);
+      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-50, 50), Random.float(-13, 23), -200)));
       ship.Velocity.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
       // ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
       ship.scale.copy(prob_struct.scale);
+      ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
+    }
+    catch (e) {
+
     }
   }
 }
@@ -1890,14 +2501,8 @@ function createCamera() {
   user.position.set(0, 0.02, -0.12);
   user.rotateY(0);
 
-  g_player = new PlayerShip();
-  g_player.add(user);
-  g_player.up = new Vector3(0, 1, 0);
-  g_player.position.set(0, 0, 10);
-  g_player.Velocity.set(0, 0, -10);
-  g_player.Destroy = function () { /*do not destroy player */ }
-  g_player.rotateY(0);
 }
+
 function renderLoop() {
   let last_time: number = 0;
   let delta: number = 0;
@@ -1916,19 +2521,8 @@ function renderLoop() {
 
     Globals.updateGlobals(camera, user);
 
-    if (score) {
-      score.Text = "Score: " + g_player.score;
-      score.update(camera, user);
-    }
-    if (g_gameover) {
-      g_gameover.Text = "Game Over!"
-      g_gameover.update(camera, user);
-    }
-    if (g_bombs) {
-      g_bombs.Text = "Bombs: " + g_player.bombs + "/" + g_player.maxbombs + "\n "
-        + "Health: " + g_player.health + "/" + g_player.maxhealth;
-      g_bombs.update(camera, user);
-    }
+    updateUI();
+
     if (g_shipTimer) {
       g_shipTimer.update(delta);
     }
@@ -1938,6 +2532,8 @@ function renderLoop() {
     if (axis) {
       axis.position.set(g_player.position.x - 3, g_player.position.y - 3, g_player.position.z - 10);
     }
+
+    //Lights
     if (g_pointlight) {
       g_pointlight.position.copy(g_player.position.clone().add(new Vector3(-500, 100, -500)));
     }
@@ -1947,9 +2543,37 @@ function renderLoop() {
     if (g_pointlight3) {
       g_pointlight2.position.copy(g_player.position.clone().add(new Vector3(0, 1, -2)));
     }
+
+    //Starfield
+    if (g_starfield) {
+      g_starfield.update(delta);
+    }
+
+
     renderer.render(g_physics.Scene, camera);
   };
   renderer.setAnimationLoop(render);
+}
+function updateUI() {
+  if (g_score && g_score.visible) {
+    g_score.Text = "Score: " + g_player.score;
+  }
+  if (g_gameover && g_gameover.visible) {
+    g_gameover.Text = "Game Over"
+  }
+  if (g_stats && g_stats.visible) {
+    g_stats.Text = "Bombs: " + g_player.bombs + "/" + g_player.maxbombs + "\n "
+      + "Health: " + g_player.health + "/" + g_player.maxhealth + "\n "
+      + "Level: " + g_player.ShipLevel;
+    if (Globals.isDebug()) {
+      g_stats.Text += "\n " + "Objects: " + g_physics.Objects.length + "\n " +
+        "\n " + "Stars: " + g_starfield.Stars.length + "\n ";
+    }
+  }
+  for (let itext = 0; itext < g_allTextObjects.length; ++itext) {
+    g_allTextObjects[itext].update(camera, user);
+  }
+
 }
 function resizeRendererToDisplaySize(renderer: THREE.WebGLRenderer) {
   const canvas = renderer.domElement;
@@ -1962,11 +2586,13 @@ function resizeRendererToDisplaySize(renderer: THREE.WebGLRenderer) {
   }
   return needResize;
 }
+
 function createScene() {
   let szGrid = 'dat/img/grd.png';
   let szStar = 'dat/img/starfield_0.png';
   let szStar2 = 'dat/img/starfield_1.png';
-  let szStar3 = 'dat/img/starfield_3.png';
+  let szStar3 = 'dat/img/starfield_2.png';
+  let szBlack = 'dat/img/black.png';
 
   let bk = szStar2;
 
@@ -1991,9 +2617,12 @@ function createScene() {
   g_pointlight3 = new THREE.PointLight(0xffffff, 0.4, 100);
   g_physics.Scene.add(g_pointlight3);
 }
-function createUIText(): void {
+function createUIText(player: PlayerShip): void {
+  g_allTextObjects = new Array<TextCanvas>();
+
+
   //Create Console
-  Globals.setConsole3D(g_physics.Scene, g_player);
+  Globals.setConsole3D(g_physics.Scene, player);
 
   //Test Score
   let opts: TextCanvasOptions;
@@ -2004,46 +2633,79 @@ function createUIText(): void {
   opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
   opts.Height = 0.1;
   opts.AutoHeight = false;
+  g_score = new TextCanvas(opts);
+  g_score.showWireframe(Globals.isDebug());
+  g_score.AlignToScreen = true;
+  g_score.ScreenX = 0.0;
+  g_score.ScreenY = 0.9;
+  g_score.ScreenZ = 3;
+  player.add(g_score);
+  g_allTextObjects.push(g_score);
+  g_score.visible = false;
 
-  score = new TextCanvas(opts);
-  score.showWireframe(Globals.isDebug());
-  score.AlignToScreen = true;
-  score.ScreenX = 0.0;
-  score.ScreenY = 0.9;
-  score.ScreenZ = 3;
-
-  g_player.add(score);
   opts = new TextCanvasOptions();
   opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 300 : 100;
   opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
   opts.Height = 0.1;
   opts.AutoHeight = false;
-  opts.Text = "Bombs: " + g_player.bombs;
-  g_bombs = new TextCanvas(opts);
-  g_bombs.showWireframe(Globals.isDebug());
-  g_bombs.AlignToScreen = true;
-  g_bombs.ScreenX = 0.7;
-  g_bombs.ScreenY = 0.9;
-  g_bombs.ScreenZ = 3;
-
-  g_player.add(g_bombs);
+  opts.Text = "Bombs: " + player.bombs;
+  g_stats = new TextCanvas(opts);
+  g_stats.showWireframe(Globals.isDebug());
+  g_stats.AlignToScreen = true;
+  g_stats.ScreenX = 0.7;
+  g_stats.ScreenY = 0.9;
+  g_stats.ScreenZ = 3;
+  player.add(g_stats);
+  g_allTextObjects.push(g_stats);
+  g_stats.visible = false;
 
   opts = new TextCanvasOptions();
-  opts.Fontsize = opts.Lineheight = 200;
-  opts.Width = Globals.userIsInVR() ? 0.3 : 0.3;
-  opts.Height = 0.2;
+  opts.Fontsize = opts.Lineheight = 100;
+  opts.Width = Globals.userIsInVR() ? 0.4 : 0.4;
+  opts.Height = 0.3;
   opts.AutoHeight = false;
   opts.Text = "Game Over!";
   g_gameover = new TextCanvas(opts);
   g_gameover.showWireframe(Globals.isDebug());
   g_gameover.AlignToScreen = true;
-  g_gameover.ScreenX = 0.3;
+  g_gameover.ScreenX = -0.1;
   g_gameover.ScreenY = 0.1;
   g_gameover.ScreenZ = 8;
-
-  g_player.add(g_gameover);
-
+  player.add(g_gameover);
+  g_allTextObjects.push(g_gameover);
   g_gameover.visible = false;
+
+  opts = new TextCanvasOptions();
+  opts.Fontsize = opts.Lineheight = 80;
+  opts.Width = Globals.userIsInVR() ? 0.5 : 0.5;
+  opts.Height = 0.4;
+  opts.AutoHeight = false;
+  opts.Text = g_gameTitle;
+  g_titleHeader = new TextCanvas(opts);
+  g_titleHeader.showWireframe(Globals.isDebug());
+  g_titleHeader.AlignToScreen = true;
+  g_titleHeader.ScreenX = 0.3;
+  g_titleHeader.ScreenY = 0.1;
+  g_titleHeader.ScreenZ = 8;
+  player.add(g_titleHeader);
+  g_allTextObjects.push(g_titleHeader);
+  g_titleHeader.visible = false;
+
+  opts = new TextCanvasOptions();
+  opts.Fontsize = opts.Lineheight = 40;
+  opts.Width = Globals.userIsInVR() ? 0.8 : 0.8;
+  opts.Height = 0.4;
+  opts.AutoHeight = false;
+  opts.Text = Globals.userIsInVR() ? "Press B to play." : "Click to play.";
+  g_titleSub = new TextCanvas(opts);
+  g_titleSub.showWireframe(Globals.isDebug());
+  g_titleSub.AlignToScreen = true;
+  g_titleSub.ScreenX = 0.5;
+  g_titleSub.ScreenY = 0.6;
+  g_titleSub.ScreenZ = 8;
+  player.add(g_titleSub);
+  g_allTextObjects.push(g_titleSub);
+  g_titleSub.visible = false;
 
   //Globals.logInfo("hi1\nasdf\nhi2\n")
 }
