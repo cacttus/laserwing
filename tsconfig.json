@@ -6,7 +6,6 @@
     "baseUrl": "./src",
     "moduleResolution": "node",
     "outDir": "./dist/",
-    "noImplicitAny": true,
     "sourceMap": true,
     "maxNodeModuleJsDepth": 1,
      //Replaced none from es6
@@ -22,6 +21,9 @@
       "node_modules/@types/",
     ],
     "alwaysStrict" : true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    //"strictNullChecks": true,
     "allowSyntheticDefaultImports": true,
   }
 }

@@ -1,4 +1,5 @@
 var path = require('path');
+//var WebpackFtpUpload = require('webpack-ftp-upload')
 
 module.exports = {
   mode: 'development',
@@ -25,5 +26,6 @@ module.exports = {
 	  host: "localhost",
 	  port: 8000,
 	  https: false
-	},
+  },
+
 };
