@@ -3,10 +3,11 @@ Laser Wing is a VR Space Shooter with a few enemies and bosses.  This project wa
 
 [Play The Game](http://www.metalmario.net/laserwing?ssaa=4)
 
+***Notes***
 The game has been tested on Desktop and Oculus.  
 The system is written in TypeScript using THREE.js and also runs in Desktop.
 
-# How to Run
+## How to Run
 install *npm
 install *git bash
 Open a separate window and run 
@@ -16,7 +17,7 @@ Then on your main git bash run
 This will start webpack-dev-server
 Also note You do not need @types/three because three comes with its own tuypes
 
-# Credits
+## Credits
 
 Music 
 
