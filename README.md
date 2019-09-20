@@ -16,6 +16,16 @@ Then on your main git bash run
 This will start webpack-dev-server
 Also note You do not need @types/three because three comes with its own tuypes
 
+
+## Debugging
+Use URL parameters to enable debugging and some features
+Param  | Value | Description
+------------- | ------------- | -------------
+ssaa  | number | enables SSAA.  Default 0
+perf | true/false | Enables performance logging.
+debug | true/false | Enables debug draw.
+console | true/false | Shows the in-game console.
+
 ## Credits
 
 Music 
