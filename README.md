@@ -19,7 +19,7 @@ Also note You do not need @types/three because three comes with its own tuypes
 
 ## Debugging
 
-Use URL parameters to enable debugging and some features
+Use URL parameters to enable debugging and some features: ex. metalmario.net/laserwing?ssaa=4&debug=true
 
 Param         | Value         | Description
 ------------- | ------------- | ------------- 
