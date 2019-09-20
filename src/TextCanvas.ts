@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as Globals from './globals';
-import { LineBasicMaterial } from 'three';
+import { LineBasicMaterial, Vector3 } from 'three';
+import * as Main from './main';
 
 export class TextCanvasOptions {
   public Fontsize: number = 50;
@@ -9,6 +10,7 @@ export class TextCanvasOptions {
   public Width: number = 384;
   public Height: number = 192;
   public AutoHeight: boolean = true; //Ignore height, Automatically adjust height to be 384/192 x width
+  public opacity : number = 1;
 }
 //Implementatio of : https://vr.with.in/archive/text-2d-canvas/
 export class TextCanvas extends THREE.Object3D {
@@ -23,15 +25,7 @@ export class TextCanvas extends THREE.Object3D {
   public ScreenX = 0;
   public ScreenY = 0;
   public ScreenZ = 2;
-
   public Newlines: boolean = true; //whether we process \n on separate line
-
-  // public resetTransform() {
-  //  // this.position.set(0, 0, 0);
-  //  // this.rotation.set(0, 0, 0);
-  //   //this.scale.set(1, 1, 1);
-  //  // this.updateMatrix();
-  // }
 
   public Text: string = "Hello World.";
   public showWireframe(show: boolean) {
@@ -43,16 +37,13 @@ export class TextCanvas extends THREE.Object3D {
   public getHeight(): number {
     return this._options.Height;
   }
-
   public constructor(options: TextCanvasOptions) {
     super();
 
     this._options = options;
     this.Text = options.Text;
-
     this.createTexture();
   }
-
   public update(camera: THREE.PerspectiveCamera, u : THREE.Group): void {
     this.updateTexture();
     if (this.AlignToScreen && camera && u) {
@@ -64,7 +55,6 @@ export class TextCanvas extends THREE.Object3D {
     n = (n & 0x33333333) + ((n >> 2) & 0x33333333)
     return ((n + (n >> 4) & 0xF0F0F0F) * 0x1010101) >> 24
   }
-  
   private createTexture(): void {
     //This is a common way fo faking 3D text from a canvas.
     //384 x 192 was the original that this had.
@@ -78,10 +68,7 @@ export class TextCanvas extends THREE.Object3D {
     canvas.width = 1024;
     canvas.height = canvas.width / ratio; // make sure the canvas is the same size ratio as the geometry
 
-    //if(canvas.height)
-
     this._ctx = canvas.getContext('2d');
-
     this._texture = new THREE.Texture(canvas);
     this._texture.needsUpdate = true;
 
@@ -158,6 +145,7 @@ export class TextCanvas extends THREE.Object3D {
 
     //TODO: individually colored text blocks.
     ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = this._options.opacity;
 
     for (var n = 0; n < words.length; n++) {
       var testLine = line + words[n] + ' ';
@@ -173,18 +161,14 @@ export class TextCanvas extends THREE.Object3D {
         //we have newlines, append, then newline
         var sw = words[n].split('\n');
         if (sw.length > 0) {
-
           for (var iw = 0; iw < sw.length-1; ++iw) {
             testLine = line + sw[iw] + ' ';
-
             ctx.fillText(testLine, x, y);
             line = '';
-
             y += this._options.Lineheight;
           }
           line = sw[sw.length-1] + ' ';
         }
-
       }
       else {
         line = testLine;
@@ -196,9 +180,14 @@ export class TextCanvas extends THREE.Object3D {
   }
 
   private alignToScreen(camera: THREE.PerspectiveCamera, user : THREE.Group): void {
-
+    //This method needs a serious overhaul.
     //Move the object to the screen
-
+    let cn : Vector3 = new Vector3();
+    camera.getWorldDirection(cn);
+    let cp : Vector3 = new Vector3();
+    camera.getWorldPosition(cp);
+    
+    let f : Main.Frustum  = new Main.Frustum(cn,cp);
     let dist: number = camera.near;  // our camera has a near plane of 1 unit
 
     //This is kind of dumb

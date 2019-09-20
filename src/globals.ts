@@ -10,7 +10,8 @@ let _debug: boolean = false;
 let _prof: boolean = false;
 let _showConsole: boolean = false;
 let _console3d: Console3D = null;
-let _frame:number = 0;
+let _frame: number = 0;
+let _ssaa: number = 0;
 
 //https://spin.atomicobject.com/2018/11/05/using-an-int-type-in-typescript/
 export type Int = number & { __int__: void };
@@ -26,6 +27,13 @@ export function VRSupported(): boolean {
   return ('xr' in navigator /*&& 'supportsSession' in navigator.xr*/) ||
     ('getVRDisplays' in navigator);
 }
+export function getSSAA(): number {
+  if(userIsInVR()){
+    //The oculus messes up with SSAA turned on.  For some reason.
+    return 0;
+  }
+  return _ssaa;
+}
 export function setRenderer(x: THREE.WebGLRenderer): void {
   _renderer = x;
 }
@@ -35,6 +43,12 @@ export function setFlags(document_location: Location) {
   _debug = url_params.get('debug') === 'true';
   _showConsole = url_params.get('console') === 'true';
   _prof = url_params.get('prof') === 'true';
+  if(url_params.has('ssaa'))
+  {
+    _ssaa = parseInt(url_params.get('ssaa'));
+    if (_ssaa < 0) _ssaa = 0;
+    if (_ssaa > 32) _ssaa = 32;
+  }
 }
 export function setConsole3D(scene: THREE.Scene, user: THREE.Object3D) {
   if (_showConsole) {
@@ -53,7 +67,7 @@ export function updateGlobals(c: THREE.PerspectiveCamera, u: THREE.Group) {
   }
   _frame++;
 }
-export function getFrameNumber() : number { 
+export function getFrameNumber(): number {
   return _frame;
 }
 export function logInfo(e: any): void {

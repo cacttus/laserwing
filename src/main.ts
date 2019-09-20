@@ -1,10 +1,14 @@
 import * as $ from "jquery";
 import * as THREE from 'three';
 import * as Physijs from 'physijs-webpack';
-import { Vector3, Vector2, Vector4, Color, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3, Object3D, AlwaysStencilFunc, MeshStandardMaterial, MeshBasicMaterial } from 'three';
+import { Vector3, Vector2, Vector4, Color, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3, Object3D, AlwaysStencilFunc, MeshStandardMaterial, MeshBasicMaterial, RGBA_ASTC_10x5_Format } from 'three';
 
 import { WEBVR } from 'three/examples/jsm/vr/WebVR.js';
 import * as GLTFLoader_ from 'three/examples/jsm/loaders/GLTFLoader';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { SSAARenderPass } from 'three/examples/jsm/postprocessing/SSAARenderPass.js';
+import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
 import * as dat from 'dat.gui';
 import * as OrbitControls from 'three-orbitcontrols';
 
@@ -32,11 +36,17 @@ class GenericClassnameHelper<T> {
   }
 }
 class Utils {
+  public static getWorldPosition(x: Object3D): Vector3 {
+    let v: Vector3 = new Vector3();
+    x.getWorldPosition(v);
+    return v;
+  }
   public static className(x: Object): string {
     return x.constructor.name;
   }
-  public static classNameT<T>() {
-    return new GenericClassnameHelper<T>(T);
+  public static classNameT<T>(tt: new () => T): string {
+    let sz: string = typeof (tt);
+    return sz;
   }
   public static lerpColor(a: Color, b: Color, x: number): Color {
     let ret: Color = a.clone().add(b.clone().sub(a).multiplyScalar(x));
@@ -89,8 +99,6 @@ class Utils {
         let mat: THREE.MeshStandardMaterial = mod.material as THREE.MeshStandardMaterial;
         if (mat) {
           mat.emissive.setRGB(val.r, val.g, val.b);
-          //mat.metalness = 0;
-          // mat.roughness = 1;
         }
       }
     }
@@ -142,14 +150,13 @@ class Utils {
   }
 
 }
-
-
 /**
  * Put all files here
  */
 namespace Files {
   export enum Audio {
     Shoot = 'shoot.ogg',
+    Shoot2 = 'shoot_2.ogg',
     Bomb_Shoot = 'bomb_shoot.ogg',
     Bomb = 'bomb.ogg',
     Nope = 'nope.ogg',
@@ -180,7 +187,6 @@ namespace Files {
 //https://stackoverflow.com/questions/38213926/interface-for-associative-object-array-in-typescript
 interface Dictionary<T> {
   [key: string]: T;
-
 }
 class WaitTimer {
   private _time: number = 2;
@@ -617,7 +623,7 @@ class Input {
         gp.getWorldPosition(vc.Position);
 
         vc.Axis.x = gp.x_axis;
-        vc.Axis.y = gp.y_axis;
+        vc.Axis.y = -gp.y_axis; // y axis is inverted - ?
 
         for (let ibut: number = 0; ibut < gp.buttons.length; ++ibut) {
           if (gp.buttons[ibut].name === 'A') {
@@ -662,7 +668,7 @@ class Input {
 /**
  * A viewing frustum for a camera.  Quick class to calculate point in screen.
  */
-class Frustum {
+export class Frustum {
   private _ftl: Vector3 = new Vector3();
   private _ftr: Vector3 = new Vector3();
   private _fbl: Vector3 = new Vector3();
@@ -739,25 +745,24 @@ class Frustum {
     this._nbl = nearCenter.clone().sub(cup_near).sub(crt_near);
   }
 }
-interface PhysicsObjectCollisionCheckAB { (me: PhysicsObject, other: PhysicsObject): void; }
+interface CollisionHandler { (me: PhysicsObject, other: PhysicsObject): void; }
 enum ColliderClass { Active = 2, Passive = 1, None = 0 }
-//interface PhysicsObjectCollisionCheck<T> { (me: PhysicsObject, other: T): void; }
 class CollisionManifold {
   //buckets of objects separated by type.
   //Active - the collider has a collide() method and will actively collide
-  private _active_bucket: Map<string, Array<PhysicsObject>> = new Map<string, Array<PhysicsObject>>()
+  private _active_bucket: Map<GameObjectId, Array<PhysicsObject>> = new Map<GameObjectId, Array<PhysicsObject>>()
 
   //Passive - objects are collidees, but they do not have a collide() method
-  private _passive_bucket: Map<string, Array<PhysicsObject>> = new Map<string, Array<PhysicsObject>>()
+  private _passive_bucket: Map<GameObjectId, Array<PhysicsObject>> = new Map<GameObjectId, Array<PhysicsObject>>()
 
   //A quick map to identify if a physics object is active or passive
-  private _active_identifier: Map<string, boolean> = new Map<string, boolean>();
+  private _class_identifier: Map<GameObjectId, ColliderClass> = new Map<GameObjectId, ColliderClass>();
 
   //Handlers for active 
-  private _handlers: Map<string, Map<string, PhysicsObjectCollisionCheckAB>> = new Map<string, Map<string, PhysicsObjectCollisionCheckAB>>();
+  private _handlers: Map<GameObjectId, Map<GameObjectId, CollisionHandler>> = new Map<GameObjectId, Map<GameObjectId, CollisionHandler>>();
 
   private removePassiveCollider(x: PhysicsObject) {
-    let szclass: string = Utils.className(x);
+    let szclass: GameObjectId = x.getId();
     if (this._passive_bucket.has(szclass)) {
       let n = this._passive_bucket.get(szclass).indexOf(x);
       if (n != -1) {
@@ -766,7 +771,7 @@ class CollisionManifold {
     }
   }
   private removeActiveCollider(x: PhysicsObject) {
-    let szclass: string = Utils.className(x);
+    let szclass: GameObjectId = x.getId();
     if (this._active_bucket.has(szclass)) {
       let n = this._active_bucket.get(szclass).indexOf(x);
       if (n != -1) {
@@ -778,7 +783,7 @@ class CollisionManifold {
     //This shouldn't be needed since we already know the collision classification at startup
     //removePassiveCollider(x);
 
-    let szclass: string = Utils.className(x);
+    let szclass: GameObjectId = x.getId();
     if (!this._active_bucket.has(szclass)) {
       this._active_bucket.set(szclass, new Array<PhysicsObject>());
     }
@@ -787,7 +792,7 @@ class CollisionManifold {
     }
   }
   private registerPassiveCollider(x: PhysicsObject) {
-    let szclass: string = Utils.className(x);
+    let szclass: GameObjectId = x.getId();
     let p_has: boolean = this._passive_bucket.has(szclass) && this._passive_bucket.get(szclass).indexOf(x) !== -1;
     let a_has: boolean = this._active_bucket.has(szclass) && this._active_bucket.get(szclass).indexOf(x) !== -1;
 
@@ -798,45 +803,50 @@ class CollisionManifold {
       this._passive_bucket.get(szclass).push(x);//Really - this line here should be all that is needed in this method if this is coded correctly.
     }
   }
-  private classifyColliderClass(szclass: string): ColliderClass {
-    if (this._active_identifier.has(szclass)) {
-      if (this._active_identifier.get(szclass) === true) {
-        return ColliderClass.Active; // Active
-      }
-      else {
-        return ColliderClass.Passive; // Passive
-      }
+  private classifyCollider(szclass: GameObjectId): ColliderClass {
+    if (this._class_identifier.has(szclass)) {
+      return this._class_identifier.get(szclass);
     }
     return ColliderClass.None; //no classification, does not collide.
   }
-  private promoteColliderClass(szclass: string, eclass: ColliderClass) {
+  private promoteCollider(szclass: GameObjectId, eclass: ColliderClass) {
     //Promote to passive/active based on the collision function
-    let cur_class: ColliderClass = this.classifyColliderClass(szclass);
+    let cur_class: ColliderClass = this.classifyCollider(szclass);
 
     //Might need to conver these to int?
     if (cur_class < eclass) {
-      this._active_identifier.set(szclass, class);
+      this._class_identifier.set(szclass, eclass);
     }
   }
-  public collide<S, T>(func: PhysicsObjectCollisionCheckAB) {
+  public collide(sza: GameObjectId, szp: GameObjectId, func: CollisionHandler) {
+    //check the arguments https://stackoverflow.com/questions/50550382/how-to-get-the-type-of-t-inside-generic-method-in-typescript
     //Adds a collision handler.
     //Assuming this is possible.
-    let sza = Utils.classNameT(S);
-    this.promoteColliderClass(sza, ColliderClass.Active);
+    //let sza: string = Utils.className(cA);
+    this.promoteCollider(sza, ColliderClass.Active);
 
-    let szp = Utils.classNameT(T);
-    this.promoteColliderClass(szp, ColliderClass.Passive);
+    //let szp: string = Utils.classNameT<P>(cP);
+    this.promoteCollider(szp, ColliderClass.Passive);
 
     if (!this._handlers.has(sza)) {
-      this._handlers.set(sza, new Map<string, PhysicsObjectCollisionCheckAB>());
+      this._handlers.set(sza, new Map<GameObjectId, CollisionHandler>());
     }
     this._handlers.get(sza).set(szp, func);
   }
+  private getHandler(a_class: GameObjectId, b_class: GameObjectId): CollisionHandler {
+    if (this._handlers.has(a_class)) {
+      let m: Map<GameObjectId, CollisionHandler> = this._handlers.get(a_class);
+      if (m.has(b_class)) {
+        return m.get(b_class);
+      }
+    }
+    return null;
+  }
   public registerCollider(ob: PhysicsObject) {
     //should be called directly from physisobject constructor
-    let sza = Utils.className(ob);
+    let sza = ob.getId();
 
-    let c: ColliderClass = this.classifyColliderClass(sza);
+    let c: ColliderClass = this.classifyCollider(sza);
     if (c == ColliderClass.Active) {
       this.registerActiveCollider(ob);
       ob.IsCollider = true;
@@ -845,10 +855,16 @@ class CollisionManifold {
       this.registerPassiveCollider(ob);
       ob.IsCollider = true; // default this to false.
     }
+    else {
+      //This object does not collide with anything.  Great!
+      let n = 0;
+      n++;
+    }
   }
   public deregisterCollider(ob: PhysicsObject) {
     if (ob.IsCollider) {
-      let c: ColliderClass = this.classifyColliderClass(sza);
+      let sza = ob.getId();
+      let c: ColliderClass = this.classifyCollider(sza);
       if (c == ColliderClass.Active) {
         this.removeActiveCollider(ob);
       }
@@ -858,29 +874,145 @@ class CollisionManifold {
     }
   }
   public handleCollisions() {
-    for (let key of Array.from(this._active_bucket.keys())) {
-      let arr: Array<PhysicsObject> = this._active_bucket[key];
+    //  loop handlers which are an active -> passive/active pair
+    //  some handlers won't have any objects, meaning it'd be smarter 'more optimal' to loop over objects first, then
+    //  call handlers
+    //  of course.. slap on bvh and we make this fast
+    let handler_keys = Array.from(this._handlers.keys());
+    for (let ih = 0; ih < handler_keys.length; ih++) {
+      let aid: GameObjectId = handler_keys[ih];
 
-      for (let iob = 0; iob < arr.length; ++iob) {
+      if (this._active_bucket.has(aid)) {
+        let a_arr: Array<PhysicsObject> = this._active_bucket.get(aid);
+        let b_keys = Array.from(this._handlers.get(handler_keys[ih]).keys());
+        for (let ai = 0; ai < a_arr.length; ai++) {
+          let A: PhysicsObject = a_arr[ai];
+          if (A.IsDestroyed === false) {
+            for (let bik = 0; bik < b_keys.length; ++bik) {
+              let bid = b_keys[bik];
 
+              if (this._active_bucket.has(bid)) {
+                let b_arr: Array<PhysicsObject> = this._active_bucket.get(bid);
+                for (let bi = 0; bi < b_arr.length; ++bi) {
+                  let B: PhysicsObject = b_arr[bi];
+
+                  if (A.IsDestroyed === false && B.IsDestroyed === false) {
+                    if (A.Box.intersectsBox(B.Box)) {
+                      let handler: CollisionHandler = this.getHandler(aid, bid);
+                      handler(A, B);
+                    }
+                  }
+                }
+              }
+              else if (this._passive_bucket.has(bid)) {
+                let b_arr: Array<PhysicsObject> = this._passive_bucket.get(bid);
+                for (let bi = 0; bi < b_arr.length; ++bi) {
+                  let B: PhysicsObject = b_arr[bi];
+
+                  if (B.IsDestroyed === false) {
+                    if (A.IsDestroyed === false && A.Box.intersectsBox(B.Box)) {
+                      let handler: CollisionHandler = this.getHandler(aid, bid);
+                      handler(A, B);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
 
-    }
-  }
-}
 
+    }
+
+
+
+    /*
+    
+        for (let a_key = 0; a_key < active_keys.length; a_key++) {
+          let a_class: Array<PhysicsObject> = this._active_bucket.get(active_keys[a_key]);
+          for (let ai = 0; ai < a_class.length; ++ai) {
+            let A: PhysicsObject = a_class[ai];
+            this.collideSet(A, ai, this._active_bucket, active_keys);
+    
+            //active->active
+            for (let b_key = a_key + 1; b_key < active_keys.length; b_key++) {
+              let b_class: Array<PhysicsObject> = this._active_bucket.get(active_keys[b_key]);
+    
+              let bi = 0;
+              if (b_key === a_key + 1) {
+                //We are already tested through this class, don't re-test previous objs
+                bi = ai + 1;
+              }
+              for (; bi < b_class.length; ++bi) {
+                let B: PhysicsObject = b_class[bi];
+    
+                if (A.IsDestroyed === false && B.IsDestroyed === false) {
+    
+                  if (A.Box.intersectsBox(B.Box)) {
+                    let handler: CollisionHandler = this.getHandler(A.getId(), B.getId());
+                    handler(A, B);
+                  }
+                }
+              }
+            }
+            //active->passive
+            for (let b_key = a_key; b_key < passive_keys.length; b_key++) {
+              let b_class: Array<PhysicsObject> = this._passive_bucket.get(passive_keys[b_key]);
+    
+              let bi = 0;
+              if (b_key === a_key + 1) {
+                //We are already tested through this class, don't re-test previous objs
+                bi = ai + 1;
+              }
+              for (; bi < b_class.length; ++bi) {
+                let B: PhysicsObject = b_class[bi];
+    
+                if (A.IsDestroyed === false && B.IsDestroyed === false) {
+    
+                  if (A.Box.intersectsBox(B.Box)) {
+                    let handler: CollisionHandler = this.getHandler(A.getId(), B.getId());
+                    handler(A, B);
+                  }
+                }
+              }
+            }
+    
+    
+          }
+        }*/
+    //End of collisions
+
+  }
+
+}
+enum GameObjectId {
+  PhysicsObject,
+  EnemyShip,
+  Item,
+  Boss,
+  PlayerShip,
+  EnemyBullet,
+  PlayerBullet,
+  Bomb,
+  BombExplosion,
+}
 
 interface DestroyAllObjectsFunction { (ob: PhysicsObject): boolean; }
 interface FindAllObjectsFunction { (ob: PhysicsObject): boolean; }
 class PhysicsManager {
   private _objects: Array<PhysicsObject> = new Array<PhysicsObject>();
   private _collide: Array<PhysicsObject> = new Array<PhysicsObject>();
-  public get Objects(): Array<PhysicsObject> { return this._objects; }
   private toDestroy: Array<PhysicsObject> = new Array<PhysicsObject>();
-  public Scene: THREE.Scene = null; //= new THREE.Scene();
-
+  public Scene: THREE.Scene = null;
   private _manifold: CollisionManifold = new CollisionManifold();
-  get collisions(): CollisionManifold { return this._manifold; }
+
+  public get collisions(): CollisionManifold {
+    return this._manifold;
+  }
+  public get Objects(): Array<PhysicsObject> {
+    return this._objects;
+  }
 
   public constructor() {
   }
@@ -909,28 +1041,8 @@ class PhysicsManager {
     }
     else {
       Globals.logError("destroyAllObjects - no function supplied.");
-
     }
   }
-  // public addOrRemoveCollider(ob: PhysicsObject) {
-  //   //Basically this should be turned into "set Collider" because we're marking the Phy as a collider
-  //   if (ob.Collide != null) {
-  //     for (let i = this._collide.length - 1; i >= 0; --i) {
-  //       if (this._collide[i] === ob) {
-  //         if (Globals.isDebug()) {
-  //           //this is not an error really - we can optimize this for loop search though by adding a flag on the physics object 
-  //           Globals.logError("Tried to add duplicate collider.");
-  //         }
-
-  //         return;
-  //       }
-  //     }
-  //     this._collide.push(ob);
-  //   }
-  //   else {
-  //     this.removeCollider(ob);
-  //   }
-  // }
   public add(obj: PhysicsObject) {
     for (let i = this._objects.length - 1; i >= 0; --i) {
       if (this._objects[i] == obj) {
@@ -939,9 +1051,10 @@ class PhysicsManager {
       }
     }
     this._objects.push(obj);
-    // if (obj.Collide) {
-    //   this.addOrRemoveCollider(obj);
-    // }
+    if (!obj.ghost) {
+      this.collisions.registerCollider(obj);
+    }
+
     this.Scene.add(obj);
   }
   public destroy(obj: PhysicsObject) {
@@ -954,28 +1067,15 @@ class PhysicsManager {
       obj.IsDestroyed = true;
     }
   }
-  // private removeCollider(ob: PhysicsObject) {
-  //   if (ob.Collide) {
-  //     for (let j = this._collide.length - 1; j >= 0; --j) {
-  //       if (this._collide[j] == ob) {
-  //         this._collide.splice(j, 1);//delete
-  //       }
-  //     }
-  //   }
-  // }
   public update(dt: number): void {
-    let that = this;
-    // var x = Worker(function () { });
-
-    // setTimeout(function () {
     g_prof.begin("physics-destroy&update");
     //Preliminary destroy . distance
-    for (let i = 0; i < that._objects.length; ++i) {
-      let ob = that._objects[i];
+    for (let i = 0; i < this._objects.length; ++i) {
+      let ob = this._objects[i];
 
       if (ob.DestroyCheck(ob)) {
         //Objects must have a destroy function defined.
-        that.destroy(ob);
+        this.destroy(ob);
       }
       else {
         ob.update(dt);
@@ -983,91 +1083,28 @@ class PhysicsManager {
     }
     g_prof.end("physics-destroy&update");
 
-
-
-    let nComps = 0;//REMOVE
-    let nCollides = 0;//REMOVE
-    let ndc: Dictionary<number> = {};//REMOVE
     g_prof.begin("physics-collide");
-    this.handleCollisions();
-
-    //Collide with others
-    // for (let i = 0; i < that._collide.length; i++) {
-    //   for (let j = i + 1; j < that._collide.length; j++) {
-    //     let a = that._collide[i];
-    //     let b = that._collide[j];
-    //     if (a.IsDestroyed === false && b.IsDestroyed === false) {
-    //       if (a.Box.intersectsBox(b.Box)) {
-    //         nComps++;
-    //         if (a.Collide) {
-    //           nCollides++;
-    //           if (!(a.constructor.name in ndc)) {
-    //             ndc[a.constructor.name] = 0;//REMOVE
-    //           } ndc[a.constructor.name]++;
-
-    //           a.Collide(b);
-    //         }
-    //         if (b.Collide) {
-    //           if (!(b.constructor.name in ndc)) {//REMOVE
-    //             ndc[b.constructor.name] = 0;
-    //           } ndc[b.constructor.name]++;
-
-    //           nCollides++;
-    //           b.Collide(a);
-    //         }
-    //       }
-    //     }
-    //   }
-    // }
-    if (Globals.getFrameNumber() % 30 === 0 /*|| Object.keys(ndc).length>0*/) {
-      Globals.logInfo('comparing ' + that._collide.length + ' with #comps=' + nComps + " #collides" + nCollides);
-      if (nComps > 0) {
-        let nd: Dictionary<number> = {};
-        for (let i = 0; i < that._collide.length; ++i) {//REMOVE
-          let ob = that._collide[i];
-          if (!(ob.constructor.name in nd)) {
-            nd[ob.constructor.name] = 0;
-          }
-          nd[ob.constructor.name]++;
-        }
-        let sz: string = "";
-        sz += ('holy shieet') + "\n";
-        for (let key in nd) {
-          sz += (key + " " + nd[key]) + "\n";//REMOVE
-        }
-        for (let key in ndc) {
-          sz += ('collide: ' + key + " " + ndc[key]) + "\n";//REMOVE
-        }
-        Globals.logInfo(sz);
-      }
-
-    }
+    this.collisions.handleCollisions();
     g_prof.end("physics-collide");
 
     g_prof.begin("physics-removal");
     //Remove destroyed.
-    for (let i = that.toDestroy.length - 1; i >= 0; --i) {
-      let ob = that.toDestroy[i];
+    for (let i = this.toDestroy.length - 1; i >= 0; --i) {
+      let ob = this.toDestroy[i];
       if (ob.IsDestroyed) {
 
-        for (let j = that._objects.length - 1; j >= 0; --j) {
-          if (that._objects[j] == ob) {
-            that._objects.splice(j, 1);//delete
+        for (let j = this._objects.length - 1; j >= 0; --j) {
+          if (this._objects[j] == ob) {
+            this._objects.splice(j, 1);//delete
           }
         }
-        that.removeCollider(ob);
+        this.collisions.deregisterCollider(ob);
       }
     }
     g_prof.end("physics-removal");
 
-    that.toDestroy = new Array<PhysicsObject>();
-    //  }, 13);
-
+    this.toDestroy = new Array<PhysicsObject>();
   }
-  private handleCollisions() {
-
-  }
-
 }
 class Flash {
   private _flashing: boolean = false;
@@ -1184,31 +1221,29 @@ interface PhysicsObjectDestroyCheck { (ob: PhysicsObject): boolean; }
 interface PhysicsObjectDestroyCallback { (ob: PhysicsObject): void; }
 interface PhysicsObjectDestroyCallback { (ob: PhysicsObject): void; }
 class PhysicsObject extends THREE.Object3D {
+  public getId(): GameObjectId { return GameObjectId.PhysicsObject; }
   // protected _bbox = new THREE.Box3();
   private _velocity: Vector3 = new Vector3();
   private _isDestroyed: boolean = false;
   private _rotation: Vector3 = new Vector3();
   private _scale: Vector3 = new Vector3();
-  protected _model: THREE.Mesh = null;
   private _boxHelper: THREE.BoxHelper = null;
+  private _flash: Flash = null;
+  public IsCollider: boolean = false;
+
+  private _model: THREE.Mesh = null;
   get model(): THREE.Mesh { return this._model; }
+
+  private _ghost = false; // set to true to prevent this object from being a physics collider
+  get ghost(): boolean { return this._ghost; }
+  set ghost(b: boolean) { this._ghost = b; }
 
   private _health: number = 100;
   get health(): number { return this._health; }
   set health(v: number) { this._health = v }
 
-  public IsCollider: boolean = false;
-
   protected _afterLoadModel: ModelObjectCallback = null; //Called after ship is loaded.  This is actually implemented (sloppily) by subclasses.
   public OnDestroy: PhysicsObjectDestroyCallback = null;
-
-  private _flash: Flash = null;
-  public flash(color: Color, durationInSeconds: number, saturation: number) {
-    if (this._flash == null) {
-      this._flash = new Flash(this);
-    }
-    this._flash.flash(color, durationInSeconds, saturation);
-  }
 
   //Default destroy routine for all objects.
   private _destroy: PhysicsObjectDestroyCheck = function (ob: PhysicsObject) {
@@ -1217,9 +1252,9 @@ class PhysicsObject extends THREE.Object3D {
       n++;
     }
     //Destroy if we are too far awawy from the player.
-    let ca: boolean = Math.abs(ob.WorldPosition.z - g_player.WorldPosition.z) > 500;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
+    let ca: boolean = Math.abs(ob.WorldPosition.z - g_player.WorldPosition.z) > 300;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
     //Destroy if we are behind the player (we only move forward in the z)
-    let cb: boolean = ob.position.z - g_player.position.z > 20;
+    let cb: boolean = ob.position.z - g_player.position.z > 80;
     //Destroy if our scale is zero
     let cc: boolean = (ob.scale.x < 0.0001) && (ob.scale.y < 0.0001) && (ob.scale.z < 0.0001);
     //Opacity is zero
@@ -1230,21 +1265,10 @@ class PhysicsObject extends THREE.Object3D {
   get DestroyCheck(): PhysicsObjectDestroyCheck { return this._destroy; }
   set DestroyCheck(v: PhysicsObjectDestroyCheck) { this._destroy = v; }
 
-  //Setting Collide will add or remove the object from the game's collider list
-  //If collide is null, the object doesn't collide with anything.  This is for performance reasons.  Don't set Collide if the object doesn't collide (for example is a collidee)
-  // private _collide: PhysicsObjectCollisionCheck = null;
-  // get Collide(): PhysicsObjectCollisionCheck { return this._collide; }
-  // set Collide(f: PhysicsObjectCollisionCheck) {
-  //   this._collide = f;
-  //   g_physics.addOrRemoveCollider(this);
-  // }
-
-  public collide<S, T>(func: PhysicsObjectCollisionCheck<T>) {
-    g_physics.addOrRemoveCollider<T>(this, func);
-  }
+  private _box_cached: Box3 = new Box3();
 
   get Box(): Box3 {
-    return new THREE.Box3().setFromObject(this);
+    return this._box_cached;
   }
   get IsDestroyed(): boolean { return this._isDestroyed; }
   set IsDestroyed(b: boolean) { this._isDestroyed = b; }
@@ -1283,8 +1307,11 @@ class PhysicsObject extends THREE.Object3D {
       }
     }
   }
-  public constructor() {
+
+  public constructor(isGhost: boolean = false) {
     super();
+    this.ghost = isGhost;
+
     g_physics.add(this);
 
     //By default, set us to be the default box so, in case models fail to load, we can
@@ -1294,7 +1321,12 @@ class PhysicsObject extends THREE.Object3D {
   public destroy() {
     g_physics.destroy(this);
   }
-
+  public flash(color: Color, durationInSeconds: number, saturation: number) {
+    if (this._flash == null) {
+      this._flash = new Flash(this);
+    }
+    this._flash.flash(color, durationInSeconds, saturation);
+  }
   public update(dt: number) {
     this.position.add(this.Velocity.clone().multiplyScalar(dt));
     let rdt = this.RotationDelta.clone().multiplyScalar(dt);
@@ -1318,6 +1350,8 @@ class PhysicsObject extends THREE.Object3D {
       this.Opacity = this._opacity;
     }
 
+    //Compute BB
+    this._box_cached = new THREE.Box3().setFromObject(this);
   }
   public get WorldPosition(): Vector3 {
     let v = new Vector3();
@@ -1404,7 +1438,7 @@ class Gun extends Object3D {
     this._bulletTimer.update(dt);
     this._bombTimer.update(dt);
   }
-  public fire(n: Vector3) {
+  public fire(n: Vector3, sound: boolean = true) {
     if (this._bulletTimer.ready()) {
       let v: THREE.Vector3 = new THREE.Vector3();
       this.getWorldPosition(v);
@@ -1417,12 +1451,12 @@ class Gun extends Object3D {
       let b1: Bullet = null;
       if (this._parentShip instanceof EnemyShip) {
         b1 = new EnemyBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
+        if (sound) g_audio.play(Files.Audio.Shoot, Utils.getWorldPosition(this));
       }
       else if (this._parentShip instanceof PlayerShip) {
         b1 = new PlayerBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
+        if (sound) g_audio.play(Files.Audio.Shoot2, Utils.getWorldPosition(this));
       }
-
-      g_audio.play(Files.Audio.Shoot);
       this._bulletTimer.reset();
     }
   }
@@ -1435,7 +1469,7 @@ class Gun extends Object3D {
       this.getWorldPosition(v);
       b1.position.copy(v);
 
-      g_audio.play(Files.Audio.Bomb_Shoot);
+      g_audio.play(Files.Audio.Bomb_Shoot, Utils.getWorldPosition(this));
       this._bombTimer.reset();
       return true;
     }
@@ -1448,11 +1482,11 @@ class Gun extends Object3D {
  * */
 class Ship extends PhysicsObject {
   private _pitch: number = 0;
-  private _maxpitch: number = Math.PI * 0.15;
   private _strafeSpeed: number = 12;
   private _liftSpeed: number = 12;
   private _roll: number = 0;
-  private _maxroll: number = Math.PI * 0.25;
+  private _maxroll: number = Math.PI * 0.1;
+  private _maxpitch: number = Math.PI * 0.06;
 
   protected _damage = 10;
 
@@ -1462,12 +1496,6 @@ class Ship extends PhysicsObject {
   private _guns: Array<Gun> = new Array<Gun>();
   get Guns(): Array<Gun> { return this._guns; }
   set Guns(guns: Array<Gun>) { this._guns = guns; }
-
-  protected setBulletSpeed(s: number) {
-    for (let gi = 0; gi < this.Guns.length; ++gi) {
-      this.Guns[gi].bulletSpeed = s;
-    }
-  }
 
   public constructor(sz_m: Files.Model, afterload: ModelObjectCallback) {
     super();
@@ -1505,12 +1533,6 @@ class Ship extends PhysicsObject {
       }
     });
   }
-  public fireAllGuns(dir: Vector3) {
-    let n = dir;
-    for (let i = 0; i < this.Guns.length; ++i) {
-      this.Guns[i].fire(n);
-    }
-  }
   public moveLeftRight(dt: number, xaxis: number) {
     this.position.x += this._strafeSpeed * xaxis * dt;
     this._roll = this._maxroll * xaxis * -1;
@@ -1521,8 +1543,8 @@ class Ship extends PhysicsObject {
   }
   public bulletDamage(b: Bullet) {
     this.health -= b.Damage;
-    g_audio.play(Files.Audio.Ship_Hit);
-    g_physics.destroy(b);
+    g_audio.play(Files.Audio.Ship_Hit, Utils.getWorldPosition(this));
+    b.destroy();
     g_particles.createShipHitParticles(b.WorldPosition);
     this.flash(new Color(1, 0, 0), .15, 1);
   }
@@ -1531,12 +1553,19 @@ class Ship extends PhysicsObject {
     for (let gi: number = 0; gi < this._guns.length; ++gi) {
       this._guns[gi].update(dt);
     }
-
     this.rotation.x = this._pitch;
     this.rotation.z = this._roll;
   }
+  protected setBulletSpeed(s: number) {
+    for (let gi = 0; gi < this.Guns.length; ++gi) {
+      this.Guns[gi].bulletSpeed = s;
+    }
+  }
+
 }
 class PlayerShip extends Ship {
+  public getId(): GameObjectId { return GameObjectId.PlayerShip; }
+
   public bombs: number = 3;
   public maxbombs: number = 3;
   public score: number = 0;
@@ -1564,65 +1593,31 @@ class PlayerShip extends Ship {
       if (ob instanceof PlayerShip) {
         ob.setBulletSpeed(90);
       }
-
     });
-
-
-
+  }
+  public static register() {
     //Set the collision routine.
-    let that = this;
-    this.collide<EnemyBullet>(function (me: PhysicsObject, other: EnemyBullet) {
-
+    g_physics.collisions.collide(GameObjectId.PlayerShip, GameObjectId.EnemyBullet, function (me: PhysicsObject, other: EnemyBullet) {
       me.health -= other.Damage;
-      g_audio.play(Files.Audio.Ship_Hit);
-      g_physics.destroy(other);
+      g_audio.play(Files.Audio.Ship_Hit, Utils.getWorldPosition(me));
+      other.destroy();
       g_particles.createShipHitParticles(other.WorldPosition);
       (me as PlayerShip).checkHealth();
     });
-    this.collide<EnemyShip>(function (me: PhysicsObject, other: EnemyShip) {
+    g_physics.collisions.collide(GameObjectId.PlayerShip, GameObjectId.EnemyShip, function (me: PhysicsObject, other: EnemyShip) {
       g_particles.createShipHitParticles(me.position);
       g_particles.createShipDieParticles(me.position);
-      g_audio.play(Files.Audio.Ship_Hit);
+      g_audio.play(Files.Audio.Ship_Hit, Utils.getWorldPosition(me));
       me.health -= 50;
       other.destroy();
       (me as PlayerShip).checkHealth();
     });
-
-    // this.Collide = function (b: PhysicsObject) {
-    //   if (g_isgameover == false) {
-    //     if (b instanceof Bullet) {
-    //       if ((b as Bullet).Firer instanceof EnemyShip) {
-
-    //         that.health -= (b as Bullet).Damage;
-    //         g_audio.play(Files.Audio.Ship_Hit);
-    //         g_physics.destroy(b);
-    //         g_particles.createShipHitParticles(b.WorldPosition);
-    //       }
-    //     }
-    //     else if (b instanceof EnemyShip) {
-    //       g_particles.createShipHitParticles(that.position);
-    //       g_particles.createShipDieParticles(that.position);
-    //       g_audio.play(Files.Audio.Ship_Hit);
-    //       that.health -= 100;
-    //       b.destroy();
-    //     }
-    //     else if (b instanceof Boss) {
-    //       g_particles.createShipHitParticles(that.position);
-    //       g_particles.createShipDieParticles(that.position);
-    //       g_audio.play(Files.Audio.Ship_Hit);
-    //       that.health -= 100;
-    //       b.destroy();
-    //     }
-
-    //   }
-    // };
-
   }
-  private checkHealth(): void {
+  protected checkHealth(): void {
     if (this.health <= 0) {
       this.health = 0;
       g_particles.createShipDieParticles(this.WorldPosition);
-      g_audio.play(Files.Audio.Ship_Explode);
+      g_audio.play(Files.Audio.Ship_Explode, Utils.getWorldPosition(this));
 
       stopGame();
     }
@@ -1661,7 +1656,10 @@ class PlayerShip extends Ship {
       this.Guns[gi].bombTimer.interval = this._bombSpeed_lv[this.ShipLevel > 10 ? 9 : this.ShipLevel - 1];
     }
 
-    g_audio.play(Files.Audio.LevelUp);
+    if (this.ShipLevel > 1) {
+      g_audio.play(Files.Audio.LevelUp, Utils.getWorldPosition(this));
+    }
+
   }
 
   public getColorForShipLevel(level: number): Color {
@@ -1707,25 +1705,22 @@ class PlayerShip extends Ship {
       this.moveLeftRight(dt, g_input.left.Axis.x);
       this.moveUpDown(dt, g_input.left.Axis.y);
 
-
       if (Globals.userIsInVR()) {
         if (g_input.right.Trigger.pressOrHold()) {
-          this.tryFireGun(this.Guns[0], g_input.right.Position);
-        }
-        if (g_input.left.Trigger.pressOrHold()) {
-          this.tryFireGun(this.Guns[1], g_input.left.Position);
+          this.tryFireGun(this.Guns[1], g_input.right.Position);
+          this.tryFireGun(this.Guns[0], g_input.right.Position, false);
         }
         if (g_input.right.A.pressed()) {
-          this.tryFireBomb(this.Guns[0], g_input.right.Position);
+          this.tryFireBomb(this.Guns[1], g_input.right.Position);
         }
         if (g_input.left.A.pressed()) {
-          this.tryFireBomb(this.Guns[1], g_input.left.Position);
+          this.tryFireBomb(this.Guns[0], g_input.left.Position);
         }
       }
       else {
         if (g_input.right.Trigger.pressOrHold() || g_input.left.Trigger.pressOrHold()) {
           this.tryFireGun(this.Guns[0], g_input.right.Position);
-          this.tryFireGun(this.Guns[1], g_input.left.Position);
+          this.tryFireGun(this.Guns[1], g_input.right.Position, false);
         }
         if (g_input.right.A.pressed() || g_input.left.A.pressed()) {
           this.tryFireBomb(this.Guns[0], g_input.right.Position);
@@ -1738,7 +1733,7 @@ class PlayerShip extends Ship {
     else {
       if (g_input.right.anyButtonPressed() || g_input.left.anyButtonPressed()) {
         this._nresetclick++;
-        g_audio.play(Files.Audio.Get_Item);
+        g_audio.play(Files.Audio.Get_Item, Utils.getWorldPosition(this));
       }
       if (this._nresetclick === 3) {
         this._nresetclick = 0;
@@ -1747,7 +1742,7 @@ class PlayerShip extends Ship {
     }
     super.update(dt);
   }
-  private tryFireGun(g: Gun, target_pos: Vector3): void {
+  private tryFireGun(g: Gun, target_pos: Vector3, sound: boolean = true): void {
     if (g.canFire()) {
       if (Globals.userIsInVR()) {
         let n = new THREE.Vector3();
@@ -1756,12 +1751,14 @@ class PlayerShip extends Ship {
         //Down a bit so player doesn't have to lift hands
         cw.y -= g_userGroup.position.y / 2;
         n = g_input.right.Position.clone().sub(cw);
-        g.fire(n);
+        n.normalize();
+
+        g.fire(n, sound);
       }
       else {
         let n = new THREE.Vector3();
         g_camera.getWorldDirection(n);
-        g.fire(n);
+        g.fire(n, sound);
       }
     }
   }
@@ -1775,7 +1772,7 @@ class PlayerShip extends Ship {
 
     }
     else {
-      g_audio.play(Files.Audio.Nope);
+      g_audio.play(Files.Audio.Nope, Utils.getWorldPosition(this));
     }
   }
   private getBulletTimeForLevel() {
@@ -1783,64 +1780,66 @@ class PlayerShip extends Ship {
   }
 }
 class EnemyShip extends Ship {
+  public getId(): GameObjectId { return GameObjectId.EnemyShip; }
+
   private _droprate: number = 0;
-  private _fireTimer: Timer = null;
-  private _fireTime: number = 10000;
+  private _fireTimers: Array<Timer>;
   private _points: number = 0;
   private _numdrops: number = 0;
+
   get Points(): number { return this._points; }
 
-  public constructor(model: Files.Model, health: number, droprate: number, numdrops: number, firetime: number, points: number) {
+  public constructor(model: Files.Model, health: number, droprate: number, numdrops: number, firetime: IAFloat, points: number) {
     super(model, function (ob: PhysicsObject, m: THREE.Mesh) {
       //Set bullet speed for all guns for enemy ships to be a little slower.
       if (ob instanceof EnemyShip) {
         ob.setBulletSpeed(45);
       }
-
+      let es = ob as EnemyShip;
+      if (es) {
+        es._fireTimers = new Array<Timer>();
+        for (let gi = 0; gi < es.Guns.length; ++gi) {
+          let t: Timer = new Timer(firetime.calc(), function () {
+            es.fireGun(es.Guns[gi]);
+            t.Interval = firetime.calc();
+          });
+          es._fireTimers.push(t);
+        }
+      }
     });
-    let that = this;
-    this._fireTime = firetime;
     this._points = points;
-
     this.health = health;
     this._numdrops = numdrops;
-
     this._droprate = droprate;//% chance of a drop.
-
-    this._fireTimer = new Timer(firetime, function () {
-      that.fire();
+  }
+  public static register() {
+    g_physics.collisions.collide(GameObjectId.EnemyShip, GameObjectId.PlayerBullet, function (me: EnemyShip, other: PlayerBullet) {
+      me.bulletDamage(other);
+      me.checkHealth();
     });
+    g_physics.collisions.collide(GameObjectId.EnemyShip, GameObjectId.BombExplosion, function (me: EnemyShip, other: BombExplosion) {
+      me.health -= 100;
+      me.checkHealth();
+    });
+  }
+  protected checkHealth() {
+    if (this.health <= 0) {
+      this.health = 0;
 
-    this.Collide = function (b: PhysicsObject) {
-      if (b instanceof Bullet) {
-        if ((b as Bullet).Firer instanceof PlayerShip) {
-          that.bulletDamage(b as Bullet);
-        }
+      g_particles.createShipDieParticles(this.WorldPosition);
+      g_audio.play(Files.Audio.Ship_Explode, Utils.getWorldPosition(this));
+
+      //Drop stuff
+      for (let i = 0; i < this._numdrops; ++i) {
+        this.dropItem();
       }
-      if (b instanceof BombExplosion) {
-        that.health -= 100;
-      }
-      if (b instanceof Bomb) {
-      }
 
-      if (that.health <= 0) {
-        that.health = 0;
-        g_particles.createShipDieParticles(that.WorldPosition);
-        g_audio.play(Files.Audio.Ship_Explode);
+      //Incement score
+      g_player.score += this.Points;
 
-        //Drop stuff
-        for (let i = 0; i < that._numdrops; ++i) {
-          that.dropItem();
-        }
-
-        //Incement score
-        g_player.score += that.Points;
-
-        //Kill it
-        that.destroy();
-      }
-    };
-
+      //Kill it
+      this.destroy();
+    }
   }
   private dropItem() {
     //Item Drops:
@@ -1856,23 +1855,23 @@ class EnemyShip extends Ship {
       item.position.copy(this.position.clone().add(Random.randomNormal().multiplyScalar(3)));
     }
   }
-  private fire() {
+  public fireGun(g: Gun) {
     let dir: Vector3 = new Vector3();
-
     //Point the bullet a ways away from the player for the effect of "trying" to shoot player.
     let v: Vector3 = g_player.WorldPosition.clone();
-
     dir.copy(v.sub(new Vector3(0, 0, Random.float(0, 1) * g_player.Velocity.z * 1.5)));
-
     dir.sub(this.WorldPosition);
     dir.normalize();
-
-    this.fireAllGuns(dir);
-    this._fireTimer.Interval = 3000 + Random.float(2000, 5000);
+    g.fire(dir);
   }
+
   public update(dt: number) {
     super.update(dt);
-    this._fireTimer.update(dt);
+    let that = this;
+    for (let i = 0; i < this._fireTimers.length; ++i) {
+      this._fireTimers[i].update(dt);
+    }
+
   }
 }
 /**
@@ -1883,35 +1882,16 @@ class EnemyShip extends Ship {
  */
 enum BossState { None, Fire, Spin, Cooldown }
 class Boss extends EnemyShip {
-
-  private _gunTimers: Array<Timer> = new Array<Timer>();
-
-  private _rotz = 0;
+  public getId(): GameObjectId { return GameObjectId.Boss; }
 
   private _stateTimer: WaitTimer = new WaitTimer(15);
   private _eState: BossState = BossState.Fire;
   private _posSaved: Vector3 = new Vector3();
 
   public constructor() {
-    super(Files.Model.Boss, 2000, 100, 3, -1, 100);
+    super(Files.Model.Boss, 2000, 100, 3, new IAFloat(3000, 10000), 100);
 
     this.health = 1000;
-    let that = this;
-    this.Collide = function (b: PhysicsObject) {
-      if (b instanceof Bullet) {
-        if ((b as Bullet).Firer instanceof PlayerShip) {
-          that.bulletDamage(b as Bullet);
-        }
-      }
-      if (that.health <= 0) {
-        that.health = 0;
-        g_particles.createBossDieParticles(that.WorldPosition);
-        g_audio.play(Files.Audio.Ship_Explode);
-        that.destroy();
-        exitBoss();
-      }
-    }
-
     this.DestroyCheck = function (ob: PhysicsObject) {
       let x = ob.position.z - g_player.position.z;
       if (x > 20) {
@@ -1921,6 +1901,25 @@ class Boss extends EnemyShip {
       return x > 20;
     }
     this.OnDestroy = function (ob: PhysicsObject) {
+      exitBoss();
+    }
+  }
+  public static register() {
+    g_physics.collisions.collide(GameObjectId.Boss, GameObjectId.PlayerBullet, function (me: Boss, other: PlayerBullet) {
+      me.bulletDamage(other);
+      me.checkHealth();
+    });
+    g_physics.collisions.collide(GameObjectId.Boss, GameObjectId.BombExplosion, function (me: Boss, other: BombExplosion) {
+      me.health -= 100;
+      me.checkHealth();
+    });
+  }
+  protected checkHealth() {
+    if (this.health <= 0) {
+      this.health = 0;
+      g_particles.createBossDieParticles(this.WorldPosition);
+      g_audio.play(Files.Audio.Ship_Explode, Utils.getWorldPosition(this));
+      this.destroy();
       exitBoss();
     }
   }
@@ -1991,11 +1990,7 @@ class Boss extends EnemyShip {
         this.scale.set(Random.float(squish, 1.03), Random.float(squish, 1.03), Random.float(squish, 1.03));
       }
     }
-
-
   }
-
-
 }
 class Projectile extends PhysicsObject {
   private _speed: number = 40;//.4;
@@ -2024,46 +2019,43 @@ class Projectile extends PhysicsObject {
       }
     });
 
-    this.Collide = function () { }//Force object to collide
+    // this.Collide = function () { }//Force object to collide
     this._speed = spd;
     this.Velocity.copy(direction.clone().multiplyScalar(this._speed));
   }
 }
 
 class Item extends Projectile {
-  private _isLevelItem = false;
+  public getId(): GameObjectId { return GameObjectId.Item; }
 
+  private _isLevelItem = false;
   public constructor(isLevelItem: boolean) {
     super(0, new Vector3(0, 0, -1), Files.Model.Item, function (object: PhysicsObject, model: THREE.Mesh) {
-      //object.setModel(model);
-      //fun colors.
-      /// object.Color = Utils.clampColor(Random.randomColor(), new Color(.2, .1, .2), new Color(1, 1, 1));
       object.health = 6;
     });
     this.RotationDelta.y = Math.PI * 1.0093;
     this._isLevelItem = isLevelItem;
+  }
+  public static register() {
+    g_physics.collisions.collide(GameObjectId.Item, GameObjectId.PlayerBullet, function (me: Item, other: PlayerBullet) {
+      me.health -= 1;
+      g_particles.createItemParticles(me.WorldPosition);
+      me.flash(new Color(.1, .1, .9), .1, 1);
+      other.destroy();
 
-
-    let that = this;
-    this.Collide = function (b: PhysicsObject) {
-      if (g_isgameover == false) {
-        if (b instanceof Bullet) {
-          that.health -= 1;
-          g_particles.createItemParticles(this.WorldPosition);
-          that.flash(new Color(.1, .1, .9), .1, 1);
-          b.destroy();
-        }
-        else if (b instanceof PlayerShip) {
-          that.giveItem();
-        }
-
-        if (that.health <= 0) {
-          that.health = 0;
-          that.giveItem();
-        }
-      }
-    };
-
+      me.checkHealth();
+    });
+    g_physics.collisions.collide(GameObjectId.Item, GameObjectId.BombExplosion, function (me: Item, other: BombExplosion) {
+      me.health -= 999;
+      g_particles.createItemParticles(me.WorldPosition);
+      me.checkHealth();
+    });
+  }
+  protected checkHealth() {
+    if (this.health <= 0) {
+      this.health = 0;
+      this.giveItem();
+    }
   }
   private giveItem() {
     let playership: PlayerShip = g_player;
@@ -2072,7 +2064,7 @@ class Item extends Projectile {
       g_player.levelUp();
     }
     else {
-      g_audio.play(Files.Audio.Get_Item);
+      g_audio.play(Files.Audio.Get_Item, Utils.getWorldPosition(this));
       //Health/bombs
       //Give player powerup based on what's missing
       if (playership.bombs === playership.maxbombs) {
@@ -2108,6 +2100,7 @@ class Bullet extends Projectile {
       that.Color = c.clone();
       g_particles.createBlasterParticlels(position, c);
 
+      that.Opacity = 0.6;
       that.position.copy(position);
     });
     let that = this;
@@ -2117,22 +2110,30 @@ class Bullet extends Projectile {
   }
 }
 class EnemyBullet extends Bullet {
+  public getId(): GameObjectId { return GameObjectId.EnemyBullet; }
+
   public Firer: Ship = null;
   public constructor(firer: Ship, position: Vector3, direction: Vector3, spd: number, damage: number, mod: Files.Model) {
     super(firer, position, direction, spd, damage, mod);
   }
 }
 class PlayerBullet extends Bullet {
+  public getId(): GameObjectId { return GameObjectId.PlayerBullet; }
+
   public Firer: Ship = null;
   public constructor(firer: Ship, position: Vector3, direction: Vector3, spd: number, damage: number, mod: Files.Model) {
     super(firer, position, direction, spd, damage, mod);
   }
 }
 class Bomb extends Projectile {
+  public getId(): GameObjectId { return GameObjectId.Bomb; }
+
   private _boomtimer: WaitTimer = new WaitTimer(2.5);
 
   public constructor(direction: Vector3) {
-    super(55, direction, Files.Model.Bomb, function () { });
+    super(55, direction, Files.Model.Bomb, function (that: PhysicsObject, m: THREE.Mesh) {
+      that.Opacity = 0.6;
+    });
     this.RotationDelta.x = Math.PI;
     this.rotation.z = Math.PI;
   }
@@ -2140,7 +2141,7 @@ class Bomb extends Projectile {
     super.update(dt);
     this._boomtimer.update(dt);
     if (this._boomtimer.ready()) {
-      g_audio.play(Files.Audio.Bomb);
+      g_audio.play(Files.Audio.Bomb, Utils.getWorldPosition(this));
       let exp: BombExplosion = new BombExplosion(this.position);
 
       this.destroy();
@@ -2148,6 +2149,8 @@ class Bomb extends Projectile {
   }
 }
 class BombExplosion extends Projectile {
+  public getId(): GameObjectId { return GameObjectId.BombExplosion; }
+
   private _dietimer: WaitTimer = new WaitTimer(1.1);
 
   public constructor(dposition: Vector3) {
@@ -2163,7 +2166,7 @@ class BombExplosion extends Projectile {
     this.scale.x = 0.01 + this._dietimer.time01 * scale;
     this.scale.y = 0.01 + this._dietimer.time01 * scale;
     this.scale.z = 0.01 + this._dietimer.time01 * scale;
-    this.rotation.y = this._dietimer.time01 * (Math.PI * 4.9378);
+    // this.rotation.y = this._dietimer.time01 * (Math.PI * 4.9378);
     this.Opacity = 1 - this._dietimer.time01;
 
     if (this._dietimer.ready()) {
@@ -2288,7 +2291,11 @@ class Starfield extends THREE.Object3D {
     star = new THREE.Mesh(geo, mat);
     star.position.copy(pos);
     let s: number = this._starScale.calc();
-    star.scale.set(s, s, s);
+
+    let d = Math.pow(Utils.clampScalar(pos.clone().sub(g_player.WorldPosition).length() + 30 / 900, 0, 1),2);
+    let warp = Random.float(0, 20);
+
+    star.scale.set(s, s, s  + warp);
     let c: THREE.Color = new THREE.Color();
     let r: number = Random.float(0, 1);
     if (r > 0.9) { c.r = 158 / 255; c.g = 231 / 255; c.b = 254 / 255; }//light blue
@@ -2327,7 +2334,9 @@ class AudioManager {
   public _listener: THREE.AudioListener = new THREE.AudioListener();
   public _audioLoader: THREE.AudioLoader = new THREE.AudioLoader();
   private _bufferCache: Dictionary<THREE.AudioBuffer> = {};
-  private _cache: Dictionary<Array<THREE.Audio>> = {};
+  private _cache: Dictionary<Array<THREE.PositionalAudio>> = {};
+
+  private _maxDist: number = 200;
 
   private _music: Dictionary<AsyncMusic> = {};
 
@@ -2360,13 +2369,13 @@ class AudioManager {
    * @param loop 
    * @param cache 
    */
-  public play(file: Files.Audio, loop: boolean = false, cache: boolean = true) {
-    let that = this;
+  public play(file: Files.Audio, pos: Vector3, loop: boolean = false, cache: boolean = true) {
+    //let that = this;
     let szfile: string = './dat/audio/' + file;
 
     //Three, or WebAudio must be doing some background caching, so the cache here is actually not needed, and hinders audio performance.
     if (cache === false) {
-      this.loadAndPlaySound(szfile, loop);
+      this.loadAndPlaySound(szfile, loop, pos);
     }
     else {
       if (szfile in this._cache) {
@@ -2377,6 +2386,7 @@ class AudioManager {
         for (let ibuffer = 0; ibuffer < this._cache[szfile].length; ++ibuffer) {
           if (this._cache[szfile][ibuffer].isPlaying === false) {
             this._cache[szfile][ibuffer].setLoop(loop);
+            this._cache[szfile][ibuffer].setRefDistance(this.calcSoundDist(pos));
             this._cache[szfile][ibuffer].play();
             played = true;
             break;
@@ -2384,26 +2394,50 @@ class AudioManager {
         }
         //however we don't want to grow uncontrolled, so cap at 16 sounds.
         if (!played && this._cache[szfile].length < 16) {
-          let aud: THREE.Audio = new THREE.Audio(this._listener);
+          let aud: THREE.PositionalAudio = new THREE.PositionalAudio(this._listener);
           aud.setBuffer(this._bufferCache[szfile]);
           aud.setLoop(loop);
           aud.setVolume(1);
           aud.play();
+          aud.setRefDistance(this.calcSoundDist(pos));
+          aud.setMaxDistance(this._maxDist);
           this._cache[szfile].push(aud);
         }
       }
       else {
-        this.loadAndPlaySound(szfile, loop);
+        this.loadAndPlaySound(szfile, loop, pos);
       }
     }
-
   }
-  private loadAndPlaySound(file: string, loop: boolean): void {
+  private calcSoundDist(pos: Vector3): number {
+    if (pos != null) {
+      let cp: Vector3 = new Vector3();
+      g_player.getWorldPosition(cp);
+
+
+      let dist: number = pos.clone().sub(cp).length();
+
+      dist = Utils.clampScalar(this._maxDist - dist, 0, this._maxDist);
+      let n = 0;
+      n++;
+      return dist;
+    }
+    else {
+      return 1;
+    }
+  }
+  private loadAndPlaySound(file: string, loop: boolean, pos: Vector3): void {
     let that = this;
     this._audioLoader.load(file, function (buffer: THREE.AudioBuffer) {
       that._bufferCache[file] = buffer;
-      that._cache[file] = new Array<THREE.Audio>();
-      that._cache[file].push(new THREE.Audio(that._listener));
+      that._cache[file] = new Array<THREE.PositionalAudio>();
+      let a: THREE.PositionalAudio = new THREE.PositionalAudio(that._listener);
+
+
+      a.setRefDistance(that.calcSoundDist(pos));
+      a.setMaxDistance(that._maxDist);
+
+      that._cache[file].push(a);
       that._cache[file][0].setBuffer(buffer);
       that._cache[file][0].setLoop(loop);
       that._cache[file][0].setVolume(1);
@@ -2431,7 +2465,7 @@ class AudioManager {
         ret = new THREE.Audio(g_audio._listener);
         ret.setBuffer(buffer);
         ret.setLoop(true);
-        ret.setVolume(1);
+        ret.setVolume(.55);
         ret.play();
         that._music[file] = new AsyncMusic(ret);
       }, function (xhr: any) {
@@ -2671,10 +2705,22 @@ class ParticleParams {
 }
 class Particle extends PhysicsObject {
   public constructor(m: THREE.Mesh) {//file:Files.Model) {
-    super();
+    super(true);
 
     //A direct clone for particles is ok, no need for crazy material with duplicatemodel
     let b2 = m.clone();
+    b2.traverse(function (o: Object3D) {
+      if (o instanceof THREE.Mesh) {
+        let m: THREE.Mesh = o as THREE.Mesh;
+
+        if (m.material instanceof THREE.MeshBasicMaterial) {
+          m.material = m.material.clone();
+        }
+        if (m.material instanceof THREE.MeshStandardMaterial) {
+          m.material = m.material.clone();
+        }
+      }
+    });
     this.setModel(b2);
 
   }
@@ -2739,10 +2785,10 @@ class Particles {
     params.Rotation_Delta.x = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation_Delta.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation_Delta.z = Random.float(-Math.PI * 2, Math.PI * 2);
-    params.Scale_Delta.x = params.Scale_Delta.y = params.Scale_Delta.z = Random.float(-2, -0.3);
-    params.Speed.Max = params.Speed.Min = Random.float(10, 100);
+    params.Scale_Delta.x = params.Scale_Delta.y = params.Scale_Delta.z = Random.float(-2, -0.6);
+    params.Speed.Max = params.Speed.Min = Random.float(60, 100);
     params.Color.Min.set(0.7, 0.7, 0);
-    params.Color.Max.set(1, 1, 0);
+    params.Color.Max.set(1, 1, .3);
     this.create(params);
   }
   public createItemParticles(pos: Vector3) {
@@ -2765,10 +2811,10 @@ class Particles {
     params.Rotation_Delta.x = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation_Delta.y = Random.float(-Math.PI * 2, Math.PI * 2);
     params.Rotation_Delta.z = Random.float(-Math.PI * 2, Math.PI * 2);
-    params.Scale_Delta.x = params.Scale_Delta.y = params.Scale_Delta.z = Random.float(-2, -0.3);
+    params.Scale_Delta.x = params.Scale_Delta.y = params.Scale_Delta.z = Random.float(-4, -0.9);
     params.Speed.Max = params.Speed.Min = Random.float(40, 100);
-    params.Color.Min.set(0.6, 0, 0);
-    params.Color.Max.set(1, 0, 0);
+    params.Color.Min.set(0.6, .7, .4);
+    params.Color.Max.set(0.6, 1, 1);
     params.InitialScale.Min.set(0.3, 0.3, 0.3);
     params.InitialScale.Min.set(0.6, 0.6, 0.6);
     this.create(params);
@@ -2839,7 +2885,6 @@ let g_camera: THREE.PerspectiveCamera = null;
 
 let g_physics: PhysicsManager = null;
 
-let g_renderer: THREE.WebGLRenderer = null;
 let gui: dat.GUI = null;
 
 let axis: THREE.AxesHelper = null;
@@ -2850,8 +2895,6 @@ let g_audio: AudioManager = null;
 let g_models: ModelManager = null;
 let g_screen: Screen = null;
 let g_particles: Particles = null;
-//let g_mainMusic: THREE.Audio = null;
-//let g_bossMusic: THREE.Audio = null;
 let g_bossTimer: Timer = null;
 let g_starfield: Starfield = null;
 
@@ -2863,10 +2906,12 @@ let g_gameover: TextCanvas = null;
 let g_allTextObjects: Array<TextCanvas> = new Array<TextCanvas>();
 let g_isgameover: boolean = false;
 
+//Some easy SSAA ..nice..
+let g_renderer: THREE.WebGLRenderer = null;
+let g_composer: EffectComposer = null;
+let g_ssaaRenderpass: SSAARenderPass = null;
+let g_copyPass: ShaderPass = null;
 
-// https://threejsfundamentals.org/threejs/lessons/threejs-custom-geometry.html
-// https://threejsfundamentals.org/threejs/lessons/threejs-webvr.html
-// https://fossies.org/linux/three.js/examples/webvr_rollercoaster.html
 $(document).ready(function () {
   Globals.setFlags(document.location);
   window.addEventListener('resize', function () {
@@ -2912,6 +2957,8 @@ function initGame(): void {
 
   g_physics = new PhysicsManager();
 
+  registerCollisions();
+
   g_input = new Input();
 
 
@@ -2943,7 +2990,16 @@ function initGame(): void {
   g_prof.frameEnd();
 
 }
+function registerCollisions() {
+  //I want to register collision handlers IN the physics classes.
+  PlayerShip.register();
+  EnemyShip.register();
+  //  EnemyBullet.register();
+  //  PlayerBullet.register();
+  Boss.register();
+  Item.register();
 
+}
 function listenForGameStart() {
   if (g_input.right.A.pressed() || g_input.right.Trigger.pressed() || g_input.left.A.pressed() || g_input.left.Trigger.pressed()) {
     startGame();
@@ -2973,15 +3029,20 @@ function showTitle() {
 function startGame() {
   g_gameState = GameState.Play;
 
+  g_player.ShipLevel = 0;
+  g_player.levelUp();
+  g_player.score = 0;
+
   //Destroy the title model.
   g_physics.destroyAllObjects(function (ob: PhysicsObject) { return ob instanceof TitleModel; });
   g_player.showModel();
 
-  g_bossTimer = new Timer(60 * 1000, function () {
+  g_bossTimer = new Timer(60 * 1000 * 3, function () {
     enterBoss();
   });
 
   g_stats.visible = true;
+  g_score.visible = true;
   g_gameover.visible = false;
   g_titleSub.visible = false;
   g_titleHeader.visible = false;
@@ -3001,11 +3062,12 @@ function startGame() {
 }
 function stopGame() {
   g_gameState = GameState.GameOver;
-  g_player.model.visible = false;
+  g_player.hideModel();
   g_isgameover = true;
   g_gameover.visible = true;
   g_stats.visible = false;
-  g_audio.play(Files.Audio.GameOver);
+
+  g_audio.play(Files.Audio.GameOver, Utils.getWorldPosition(g_player));
   g_audio.stopMusic(g_audio.mainMusicFile);
   g_audio.stopMusic(g_audio.bossMusicFile);
   g_bossTimer.stop();
@@ -3071,7 +3133,7 @@ function createEnemies() {
     }
 
     try {
-      let ship: EnemyShip = new EnemyShip(file, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime.calc(), prob_struct.points);
+      let ship: EnemyShip = new EnemyShip(file, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime, prob_struct.points);
       ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-50, 50), Random.float(-13, 23), -200)));
       ship.Velocity.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
       // ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
@@ -3213,9 +3275,20 @@ class Prof {
 
   }
 }
+
 function gameLoop() {
   let last_time: number = 0;
   let delta: number = 0;
+
+  if (Globals.getSSAA() > 0) {
+    g_composer = new EffectComposer(g_renderer);
+    g_ssaaRenderpass = new SSAARenderPass(g_physics.Scene, g_camera, new THREE.Color(0, 0, 0), 0);
+    g_ssaaRenderpass.unbiased = false;
+    g_ssaaRenderpass.sampleLevel = Globals.getSSAA();
+    g_composer.addPass(g_ssaaRenderpass);
+    g_copyPass = new ShaderPass(CopyShader);
+    g_composer.addPass(g_copyPass);
+  }
 
   var render = function (time: number) {
     g_prof.frameStart();
@@ -3284,7 +3357,12 @@ function gameLoop() {
         g_prof.end("starfield");
       }
       g_prof.begin("render");
-      g_renderer.render(g_physics.Scene, g_camera);
+      if (Globals.getSSAA() == 0) {
+        g_renderer.render(g_physics.Scene, g_camera);
+      }
+      else {
+        g_composer.render();
+      }
       g_prof.end("render");
     }
     g_prof.frameEnd();
@@ -3357,42 +3435,40 @@ function createScene() {
 }
 function createUIText(player: PlayerShip): void {
   g_allTextObjects = new Array<TextCanvas>();
-
-
-  //Create Console
   Globals.setConsole3D(g_physics.Scene, player);
 
-  //Test Score
   let opts: TextCanvasOptions;
-
   opts = new TextCanvasOptions();
   opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 300 : 100;
   opts.Text = "Score: 0";
   opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
-  opts.Height = 0.1;
+  opts.Height = 0.5;
   opts.AutoHeight = false;
+  opts.opacity = 0.5;
   g_score = new TextCanvas(opts);
   g_score.showWireframe(Globals.isDebug());
   g_score.AlignToScreen = true;
-  g_score.ScreenX = 0.0;
-  g_score.ScreenY = 0.9;
+  g_score.ScreenX = Globals.userIsInVR() ? -3.5 : -1.0;
+  g_score.ScreenY = Globals.userIsInVR() ? 2.8 : 0.9;
   g_score.ScreenZ = 3;
   player.add(g_score);
   g_allTextObjects.push(g_score);
   g_score.visible = false;
 
   opts = new TextCanvasOptions();
-  opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 300 : 100;
-  opts.Width = Globals.userIsInVR() ? 0.3 : 0.1;
-  opts.Height = 0.1;
+  opts.Lineheight = opts.Fontsize = Globals.userIsInVR() ? 150 : 100;
+  opts.Width = Globals.userIsInVR() ? 0.5 : 0.1;
+  opts.Height = Globals.userIsInVR() ? 0.8 : 0.1;
   opts.AutoHeight = false;
   opts.Text = "Bombs: " + player.bombs;
+  opts.opacity = 0.5;
   g_stats = new TextCanvas(opts);
   g_stats.showWireframe(Globals.isDebug());
   g_stats.AlignToScreen = true;
-  g_stats.ScreenX = 0.7;
-  g_stats.ScreenY = 0.9;
+  g_stats.ScreenX = Globals.userIsInVR() ? 1.2 : 0.7;
+  g_stats.ScreenY = Globals.userIsInVR() ? 2.8 : 0.9;
   g_stats.ScreenZ = 3;
+
   player.add(g_stats);
   g_allTextObjects.push(g_stats);
   g_stats.visible = false;
@@ -3456,7 +3532,5 @@ function createUIText(player: PlayerShip): void {
   player.add(g_titleSub);
   g_allTextObjects.push(g_titleSub);
   g_titleSub.visible = false;
-
-  //Globals.logInfo("hi1\nasdf\nhi2\n")
 }
 
