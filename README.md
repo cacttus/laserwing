@@ -18,7 +18,9 @@ Also note You do not need @types/three because three comes with its own tuypes
 
 
 ## Debugging
+
 Use URL parameters to enable debugging and some features
+
 Param         | Value         | Description
 ------------- | ------------- | ------------- 
 ssaa          | 0-32          | Enables screen space antialiasing (smooths the canvas text).  Default 0.
