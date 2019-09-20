@@ -4,8 +4,7 @@ Laser Wing is a VR Space Shooter with a few enemies and bosses.  This project wa
 [Play The Game](http://www.metalmario.net/laserwing?ssaa=4)
 
 ***Notes***
-The game has been tested in Chrome on Windows and the Oculus Quest.    
-The system is written in TypeScript using THREE.js and also runs in Desktop.
+Tested in Chrome on Windows and with Oculus Quest.    
 
 ## How to Run
 install *npm
