@@ -1,10 +1,10 @@
 # Laser Wing VR
-A VR Space Shooter.
+Laser Wing is a VR Space Shooter with a few enemies and bosses.  This project was written for the Facebook Developer Circles Challenge of 2019.  
 
-Also runs in Desktop.
+[Working Copy of the Game](http://www.metalmario.net/laserwing?ssaa=4)
 
-# Install requirements
-
+The game has been tested on Desktop and Oculus.  
+The system is written in TypeScript using THREE.js and also runs in Desktop.
 
 # How to Run
 install *npm
