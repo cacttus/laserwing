@@ -3423,6 +3423,8 @@ function startGame() {
   g_player.ShipLevel = 0;
   g_player.levelUp();
   g_player.score = 0;
+  g_player.health = 100;
+  g_player.maxbombs = 3;
 
   //Destroy the title model.
   g_physics.destroyAllObjects(function (ob: PhysicsObject) { return ob instanceof TitleModel; });
