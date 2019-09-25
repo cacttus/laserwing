@@ -18,6 +18,15 @@ export type Int = number & { __int__: void };
 
 export const roundToInt = (num: number): Int => Math.round(num) as Int;
 
+export function vrDeviceIsPresenting(): boolean {
+  //You can't resize if the vr device is presenting.
+  let d = _renderer.vr.getDevice();
+  let b : boolean = _renderer.vr && d && d.isPresenting;
+  if(b===null){
+    b = false;
+  }
+  return b;
+}
 export function userIsInVR(): boolean {
   return (VRSupported() && _renderer.vr.enabled);
 }

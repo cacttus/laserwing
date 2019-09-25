@@ -1,8 +1,9 @@
 import * as $ from "jquery";
 import * as THREE from 'three';
 import * as Physijs from 'physijs-webpack';
-import { Vector3, Vector2, Vector4, Color, ShapeUtils, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3, Object3D, AlwaysStencilFunc, MeshStandardMaterial, MeshBasicMaterial, RGBA_ASTC_10x5_Format } from 'three';
+import { Vector3, Vector2, Vector4, Color, ShapeUtils, Mesh, PerspectiveCamera, Box3, Geometry, Scene, Matrix4, Matrix3, Object3D, AlwaysStencilFunc, MeshStandardMaterial, MeshBasicMaterial, RGBA_ASTC_10x5_Format, Material } from 'three';
 
+import { WEBGL } from 'three/examples/jsm/WebGL.js';
 import { WEBVR } from 'three/examples/jsm/vr/WebVR.js';
 import * as GLTFLoader_ from 'three/examples/jsm/loaders/GLTFLoader';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -18,23 +19,6 @@ import * as Globals from './globals';
 import * as Mersenne from './mersenne-twister';//https://github.com/boo1ean/mersenne-twister
 import MersenneTwister from "mersenne-twister";
 
-
-//https://www.c-sharpcorner.com/article/learn-about-extension-methods-in-typescript/
-//https://www.typescriptlang.org/docs/handbook/declaration-merging.html
-// declare namespace THREE {
-// interface Color {
-//   clamp(min: Color, max: Color): Color;
-// }
-// Color.prototype.clamp = function (min: Color, max: Color): Color {
-//   return new Color();
-// }
-// }
-class GenericClassnameHelper<T> {
-  public TName: string;//https://stackoverflow.com/questions/47312116/how-to-get-generic-classt-name-of-typescript
-  constructor(x: new () => T) {
-    this.TName = x.name;
-  }
-}
 class Utils {
   public static getWorldPosition(x: Object3D): Vector3 {
     let v: Vector3 = new Vector3();
@@ -95,37 +79,17 @@ class Utils {
   }
   public static setMeshColorEm(mod: THREE.Mesh, val: Color) {
     if (val) {
-      if (mod.material) {
+      if (mod.material && mod.material instanceof THREE.MeshStandardMaterial) {
         let mat: THREE.MeshStandardMaterial = mod.material as THREE.MeshStandardMaterial;
-        if (mat) {
+        if (mat && mat.emissive) {
           mat.emissive.setRGB(val.r, val.g, val.b);
         }
       }
     }
   }
-  public static setMeshColor(mod: THREE.Mesh, val: Color) {
-    if (val) {
-      if (mod.material) {
-        let mat: THREE.MeshBasicMaterial = mod.material as THREE.MeshBasicMaterial;
-        if (mat) {
-          mat.color.setRGB(val.r, val.g, val.b);
-        }
-      }
-    }
-  }
-  public static getMeshColor(mod: THREE.Mesh): Color {
-    let c: Color = new Color();
-    if (mod.material) {
-      let mat: THREE.MeshBasicMaterial = mod.material as THREE.MeshBasicMaterial;
-      if (mat) {
-        c.copy(mat.color);
-      }
-    }
-    return c;
-  }
   public static getMeshColorEm(mod: THREE.Mesh): Color {
     let c: Color = new Color();
-    if (mod.material) {
+    if (mod.material && mod.material instanceof MeshStandardMaterial) {
       let mat: THREE.MeshStandardMaterial = mod.material as THREE.MeshStandardMaterial;
       if (mat) {
         c.copy(mat.emissive);
@@ -133,6 +97,34 @@ class Utils {
     }
     return c;
   }
+  public static setMeshColor(mod: THREE.Mesh, val: Color): boolean {
+    if (val) {
+      if (mod.material) {
+        if (mod.material instanceof MeshBasicMaterial) {
+          mod.material.color.setRGB(val.r, val.g, val.b);
+          return true;
+        }
+        else if (mod.material instanceof MeshStandardMaterial) {
+          mod.material.color.setRGB(val.r, val.g, val.b);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  public static getMeshColor(mod: THREE.Mesh): Color {
+    let c: Color = new Color();
+    if (mod.material) {
+      if (mod.material instanceof MeshBasicMaterial) {
+        c.copy(mod.material.color);
+      }
+      else if (mod.material instanceof MeshStandardMaterial) {
+        c.copy(mod.material.color);
+      }
+    }
+    return c;
+  }
+
   public static duplicateModel(mod: THREE.Mesh, material: boolean = false): THREE.Mesh {
     let ret: THREE.Mesh = mod.clone();
     //Don't do this.
@@ -175,13 +167,18 @@ namespace Files {
     Enemy_Ship = 'enemy_ship.glb',
     Enemy_Ship2 = 'enemy_ship2.glb',
     Enemy_Ship3 = 'enemy_ship3.glb',
+    Enemy_Ship4 = 'enemy_ship4.glb',
     Bullet = 'bullet.glb',
     Bomb = 'bomb.glb',
     Bomb_Explosion = 'bomb_explosion.glb',
     Item = 'item.glb',
     Boss = 'boss.glb',
-    Missile = 'missile.glb',
     Big_Bullet = 'big_bullet.glb',
+    Boss_Missile = 'boss_missile.glb',
+    Boss_Bomb_Bullet = 'boss_bomb_bullet.glb',
+    Boss_Bomb_Plus = 'boss_bomb_plus.glb',
+    Spacejunk_Bullet = 'spacejunk_bullet.glb',
+    Triple_Bullet = 'triple_bullet.glb',
   }
 }
 //https://stackoverflow.com/questions/38213926/interface-for-associative-object-array-in-typescript
@@ -207,6 +204,9 @@ class WaitTimer {
       }
     }
     return this.ready();
+  }
+  public trigger() {
+    this._time = 0;
   }
   public ready(): boolean {
     return this._time <= 0;
@@ -887,7 +887,8 @@ class CollisionManifold {
         let b_keys = Array.from(this._handlers.get(handler_keys[ih]).keys());
         for (let ai = 0; ai < a_arr.length; ai++) {
           let A: PhysicsObject = a_arr[ai];
-          if (A.IsDestroyed === false) {
+
+          if (A.isCollidable()) {
             for (let bik = 0; bik < b_keys.length; ++bik) {
               let bid = b_keys[bik];
 
@@ -896,7 +897,8 @@ class CollisionManifold {
                 for (let bi = 0; bi < b_arr.length; ++bi) {
                   let B: PhysicsObject = b_arr[bi];
 
-                  if (A.IsDestroyed === false && B.IsDestroyed === false) {
+                  //Second substance check [destroy/visible], since we could have destroyed the model earlier in the loop.
+                  if (A.isCollidable() && B.isCollidable()) {
                     if (A.Box.intersectsBox(B.Box)) {
                       let handler: CollisionHandler = this.getHandler(aid, bid);
                       handler(A, B);
@@ -909,8 +911,8 @@ class CollisionManifold {
                 for (let bi = 0; bi < b_arr.length; ++bi) {
                   let B: PhysicsObject = b_arr[bi];
 
-                  if (B.IsDestroyed === false) {
-                    if (A.IsDestroyed === false && A.Box.intersectsBox(B.Box)) {
+                  if (B.isCollidable() && A.isCollidable()) {
+                    if (A.Box.intersectsBox(B.Box)) {
                       let handler: CollisionHandler = this.getHandler(aid, bid);
                       handler(A, B);
                     }
@@ -919,6 +921,7 @@ class CollisionManifold {
               }
             }
           }
+
         }
       }
 
@@ -1064,6 +1067,7 @@ class PhysicsManager {
       if (obj.OnDestroy) {
         obj.OnDestroy(obj);
       }
+      obj.removeHelpers();
       obj.IsDestroyed = true;
     }
   }
@@ -1083,9 +1087,13 @@ class PhysicsManager {
     }
     g_prof.end("physics-destroy&update");
 
-    g_prof.begin("physics-collide");
-    this.collisions.handleCollisions();
-    g_prof.end("physics-collide");
+    //Prevent physics from happening when ship is destroyed
+    if (g_gameState !== GameState.GameOver) {
+      g_prof.begin("physics-collide");
+      this.collisions.handleCollisions();
+      g_prof.end("physics-collide");
+    }
+
 
     g_prof.begin("physics-removal");
     //Remove destroyed.
@@ -1106,22 +1114,80 @@ class PhysicsManager {
     this.toDestroy = new Array<PhysicsObject>();
   }
 }
-class Flash {
+//Creates a copy of another mesh's material in case we need to set custom material properties.
+class MaterialDuplicate {
   private _flashing: boolean = false;
   private _flash: number = 0;
   private _flashDir: number = 1;//-1, or 1
   private _saturation: number = 0;
   private _duration: number = 0;
   private _flashColor: Color = new Color(0, 0, 0);
-  private _ob_to_color_ob: Array<THREE.Mesh> = new Array<THREE.Mesh>();
-  private _ob_to_color_color: Array<Color> = new Array<Color>();
-  private _ob_to_color_color_em: Array<Color> = new Array<Color>();//For MeshStandardMaterial
-  private _ob_to_material: Array<THREE.Material> = new Array<THREE.Material>();
 
+  private _isUniqueMaterial: boolean = false;
+  private _isUnqiueColor: boolean = false;
+  private _ob_to_material: Map<Mesh, Material> = new Map<Mesh, Material>();
+  private _flash_saved_material: Map<Mesh, Material> = new Map<Mesh, Material>();
   private _parent: Object3D = null;
 
   public constructor(parent: Object3D) {
     this._parent = parent;
+  }
+
+  private _opacity: number = 1;
+  get opacity(): number {
+    return this._opacity;
+  }
+  set opacity(val: number) {
+    let that = this;
+
+    that._opacity = val;
+
+    this.saveMaterial();
+
+    if (that._parent !== null) {
+      that._parent.traverse(function (ob_child: any) {
+        if (ob_child instanceof THREE.Mesh) {
+
+          let mod: THREE.Mesh = ob_child as THREE.Mesh;
+          if (mod) {
+            if (mod.material) {
+              let mat: THREE.Material = mod.material as THREE.Material;
+
+              if (mat) {
+                //Force front sided material to prevent draw order problems.
+                mat.side = THREE.FrontSide;
+                if (mat.transparent === false) {
+                  mat.transparent = true;
+                }
+                mat.opacity = val;
+              }
+            }
+          }
+
+        }
+      });
+    }
+  }
+  public set color(val: Color) {
+    this.setColor(val, null);
+  }
+  public setColor(val: Color, meshName: string = null): boolean {
+    //The way this works, if we ever change the material color, it permanently becomes a unique material.
+    let that = this;
+    let colorSet: boolean = false;
+    that._parent.traverse(function (ob_child: any) {
+      if (ob_child instanceof Mesh) {
+        let m: Mesh = ob_child as Mesh;
+        if (meshName === null || m.name === meshName) {
+          that.saveMaterial();
+          if (Utils.setMeshColor(m, val)) {
+            that._isUnqiueColor = true;
+            colorSet = true;
+          }
+        }
+      }
+    });
+    return colorSet;
   }
   public flash(color: Color, durationInSeconds: number, saturation: number): void {
     //Saturation from [0,1]
@@ -1132,48 +1198,79 @@ class Flash {
       this._flash = 0.000001; //set to little amount to prevent erroneous checking.
       this._saturation = Utils.clampScalar(saturation, 0, 1);
       this._duration = Utils.clampScalar(durationInSeconds, 0, 999999);
-      this._ob_to_color_ob = new Array<THREE.Mesh>();
-      this._ob_to_color_color = new Array<Color>();
-      this._ob_to_color_color_em = new Array<Color>();
-      this._ob_to_material = new Array<THREE.Material>();
       this._flashDir = 1;
 
-      //Save all colors
       let that = this;
-      this._parent.traverse(function (ob_child: any) {
-        if (ob_child instanceof THREE.Mesh) {
 
-          let m: THREE.Mesh = ob_child as THREE.Mesh;
-          that._ob_to_color_ob.push(m);
+      this.saveMaterial();
 
-          //Save material, and swap, restore later to prevent too many render passes.
-          let m2: THREE.Material = null;
-          if (m.material instanceof THREE.MeshBasicMaterial) {
-            m.material = m.material.clone();
-            that._ob_to_material.push(m.material);
-          }
-          else if (m.material instanceof THREE.MeshStandardMaterial) {
-            m.material = m.material.clone();
-            that._ob_to_material.push(m.material);
-          }
-          else {
-            that._ob_to_material.push(null);
-          }
+      that._flash_saved_material = new Map<Mesh, Material>();
 
-          let c: Color = Utils.getMeshColor(m);
-          that._ob_to_color_color.push(c);
-          let ce: Color = Utils.getMeshColorEm(m);
-          that._ob_to_color_color_em.push(ce);
-
-
+      //Save emissive color for flash only.
+      that._parent.traverse(function (ob_child: any) {
+        if (ob_child instanceof Mesh) {
+          let m: Mesh = ob_child as Mesh;
+          that._flash_saved_material.set(m, m.material as Material);
+          that.cloneMeshMaterial(m);
           //Blank out emissive so we get a full red.
-          Utils.setMeshColorEm(m, new THREE.Color(0, 0, 0));
+          if (m.material && m.material instanceof MeshStandardMaterial) {
+            m.material.emissive = new Color(0, 0, 0);
+          }
+        }
+      });
+    }
+  }
+  public update(dt: number) {
+    this.updateFlash(dt);
+    this.checkRestoreMaterial();
+  }
+  private checkRestoreMaterial() {
+    if (this._isUniqueMaterial) {
+      if (this._isUnqiueColor===false && this._opacity === 1 && this._flashing === false) {
+        for (let key of Array.from(this._ob_to_material.keys())) {
+          let m: Material = this._ob_to_material.get(key);
+          key.material = m;
+        }
+      }
+      this._isUniqueMaterial = false;
+    }
+  }
+  private cloneMeshMaterial(m: Mesh) {
+    if (m.material instanceof THREE.MeshBasicMaterial) {
+      m.material = m.material.clone();
+    }
+    else if (m.material instanceof THREE.MeshStandardMaterial) {
+      m.material = m.material.clone();
+    }
+    else {
+      let n: number = 0;
+      n++;
+    }
+  }
+  private saveMaterial() {
+    let that = this;
+
+    if (that._isUniqueMaterial === false) {
+      that._isUniqueMaterial = true;
+
+      that._ob_to_material = new Map<Mesh, Material>();
+
+      that._parent.traverse(function (ob_child: any) {
+        if (ob_child instanceof Mesh) {
+
+          let m: Mesh = ob_child as Mesh;
+
+          that._ob_to_material.set(m, m.material as Material);
+
+          that.cloneMeshMaterial(m);
+
         }
       });
     }
 
   }
-  public update(dt: number) {
+
+  private updateFlash(dt: number) {
     if (this._flashing) {
 
       this._flash += dt * this._flashDir;
@@ -1189,32 +1286,34 @@ class Flash {
       if (this._flash <= 0) {
         this._flash = 0;
         this._flashing = false;
-        for (let iob = 0; iob < this._ob_to_color_ob.length; iob++) {
-          let m: THREE.Mesh = this._ob_to_color_ob[iob];
-          Utils.setMeshColor(m, this._ob_to_color_color[iob]);
-          Utils.setMeshColorEm(m, this._ob_to_color_color_em[iob]);
-          if (this._ob_to_material[iob]) {
-            m.material = this._ob_to_material[iob];
-          }
 
+        //Restore flash material.
+        for (let key of Array.from(this._flash_saved_material.keys())) {
+          let cc: Material = this._flash_saved_material.get(key);
+          key.material = cc;
         }
+
         return;
       }
 
       let fpct: number = this._flash / (this._duration * .5) * this._saturation;
 
+      //Lerp the flash material from the material we have saved.
       let that = this;
-      for (let iob = 0; iob < this._ob_to_color_ob.length; iob++) {
-        let c: Color = this._ob_to_color_color[iob]
-        let c2: Color = Utils.lerpColor(c, that._flashColor, fpct);
+      for (let key of Array.from(this._flash_saved_material.keys())) {
+        let mat: Material = this._flash_saved_material.get(key);
 
-        let m: THREE.Mesh = this._ob_to_color_ob[iob];
-        Utils.setMeshColor(m, c2);
+        if (mat instanceof MeshBasicMaterial || mat instanceof MeshStandardMaterial) {
+          let c: Color = mat.color;
+          let c2: Color = Utils.lerpColor(c, that._flashColor, fpct);
+          Utils.setMeshColor(key, c2);
+        }
 
       }
     }
-  }
 
+
+  }
 }
 //interface PhysicsObjectCollisionCheck { (b: PhysicsObject): void; }
 interface PhysicsObjectDestroyCheck { (ob: PhysicsObject): boolean; }
@@ -1228,7 +1327,8 @@ class PhysicsObject extends THREE.Object3D {
   private _rotation: Vector3 = new Vector3();
   private _scale: Vector3 = new Vector3();
   private _boxHelper: THREE.BoxHelper = null;
-  private _flash: Flash = null;
+  private _box3Helper: THREE.Box3Helper = null;
+  private _flash: MaterialDuplicate = null;
   public IsCollider: boolean = false;
 
   private _model: THREE.Mesh = null;
@@ -1245,25 +1345,33 @@ class PhysicsObject extends THREE.Object3D {
   protected _afterLoadModel: ModelObjectCallback = null; //Called after ship is loaded.  This is actually implemented (sloppily) by subclasses.
   public OnDestroy: PhysicsObjectDestroyCallback = null;
 
+  public isCollidable(): boolean {
+    let b: boolean = true;
+    b = b && this.IsDestroyed === false;
+    b = b && this.model && this.model.visible;
+    return b;
+  }
+
   //Default destroy routine for all objects.
   private _destroy: PhysicsObjectDestroyCheck = function (ob: PhysicsObject) {
     if (!g_player || !ob) {
       let n = 0;
       n++;
     }
-    //Destroy if we are too far awawy from the player.
-    let ca: boolean = Math.abs(ob.WorldPosition.z - g_player.WorldPosition.z) > 300;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
+    //Simple length check doesn't work for ship creation as the ships need to be created on a plane rather than a sphere
+    let ca: boolean = Math.abs(ob.WorldPosition.z - g_player.WorldPosition.z) >= 350; //(ob.WorldPosition.z*ob.WorldPosition.z) >=  g_player.object_destroy_dist_sq;//.distanceToSquared(player.WorldPosition) >= (camera.far * camera.far);
     //Destroy if we are behind the player (we only move forward in the z)
     let cb: boolean = ob.position.z - g_player.position.z > 80;
     //Destroy if our scale is zero
     let cc: boolean = (ob.scale.x < 0.0001) && (ob.scale.y < 0.0001) && (ob.scale.z < 0.0001);
     //Opacity is zero
-    let cd: boolean = ob._opacity <= 0;
+    let cd: boolean = ob.opacity <= 0.0001;
 
     return ca || cb || cc || cd;
   }
   get DestroyCheck(): PhysicsObjectDestroyCheck { return this._destroy; }
   set DestroyCheck(v: PhysicsObjectDestroyCheck) { this._destroy = v; }
+
 
   private _box_cached: Box3 = new Box3();
 
@@ -1280,33 +1388,7 @@ class PhysicsObject extends THREE.Object3D {
   set ScaleDelta(val: Vector3) { this._scale = val; }
   set OpacityDelta(val: number) { this._opacityDelta = val; }
   get OpacityDelta(): number { return this._opacityDelta; }
-  private _opacity: number = 1;
   private _opacityDelta: number = 0;
-
-  set Opacity(val: number) {
-    if (this._model !== null) {
-      let mod: THREE.Mesh = this._model as THREE.Mesh;
-      if (mod) {
-        if (mod.material) {
-          let mat: THREE.Material = mod.material as THREE.Material;
-          if (mat) {
-            if (mat.transparent === false) {
-              mat.transparent = true;
-            }
-            mat.opacity = val;
-          }
-        }
-      }
-    }
-  }
-  set Color(val: Color) {
-    if (this._model !== null) {
-      let mod: THREE.Mesh = this._model as THREE.Mesh;
-      if (mod) {
-        Utils.setMeshColor(mod, val);
-      }
-    }
-  }
 
   public constructor(isGhost: boolean = false) {
     super();
@@ -1316,15 +1398,39 @@ class PhysicsObject extends THREE.Object3D {
 
     //By default, set us to be the default box so, in case models fail to load, we can
     //still see them.
-    this.setModel(this.createDefaultGeo());
+    if (Globals.isDebug()) {
+      this.setModel(this.createDefaultGeo());
+    }
   }
   public destroy() {
     g_physics.destroy(this);
   }
-  public flash(color: Color, durationInSeconds: number, saturation: number) {
-    if (this._flash == null) {
-      this._flash = new Flash(this);
+  private createMaterialDuplicate() {
+    if (!this._flash) {
+      this._flash = new MaterialDuplicate(this);
     }
+  }
+  public get opacity(): number {
+    if (!this._flash) {
+      return 1;
+    }
+    else {
+      return this._flash.opacity;
+    }
+  }
+  public set opacity(o: number) {
+    this.createMaterialDuplicate();
+    this._flash.opacity = o;
+  }
+  public set color(c: Color) {
+    this.setColor(c, null);
+  }
+  public setColor(c: Color, meshName: string = null): boolean {
+    this.createMaterialDuplicate();
+    return this._flash.setColor(c, meshName);
+  }
+  public flash(color: Color, durationInSeconds: number, saturation: number) {
+    this.createMaterialDuplicate();
     this._flash.flash(color, durationInSeconds, saturation);
   }
   public update(dt: number) {
@@ -1344,14 +1450,40 @@ class PhysicsObject extends THREE.Object3D {
       this._flash.update(dt);
     }
 
-    if (this._opacityDelta != 0) {
-      this._opacity += this._opacityDelta * dt;
-      this._opacity = Math.min(1, Math.max(0, this._opacity));
-      this.Opacity = this._opacity;
+    if (this._opacityDelta !== 0) {
+      this.createMaterialDuplicate();
+
+      let op: number = this._flash.opacity;
+
+      if ((this._opacityDelta > 0 && op < 1) || (this._opacityDelta < 0 && op > 0)) {
+        op += this._opacityDelta * dt;
+        op = Math.min(1, Math.max(0, op));
+        this._flash.opacity = op;
+      }
     }
 
+    //Make sure to remove helpers BEFORE calculating the actual box.
+    this.removeHelpers();
     //Compute BB
     this._box_cached = new THREE.Box3().setFromObject(this);
+    if (Globals.isDebug()) {
+      //Must come in this order 
+      this._box3Helper = new THREE.Box3Helper(this._box_cached, new THREE.Color(0x00ff00));
+      g_physics.Scene.add(this._box3Helper);
+
+      this.add(this._boxHelper);
+    }
+  }
+  public removeHelpers() {
+    if (Globals.isDebug()) {
+      if (this._boxHelper) {
+        this.remove(this._boxHelper);
+      }
+      if (this._box3Helper) {
+        g_physics.Scene.remove(this._box3Helper);
+        this._box3Helper = null;
+      }
+    }
   }
   public get WorldPosition(): Vector3 {
     let v = new Vector3();
@@ -1361,38 +1493,38 @@ class PhysicsObject extends THREE.Object3D {
   private _modelHidden: boolean = false;
   public hideModel() {
     if (this._model) {
-      this.remove(this._model);
+      this._model.traverse(function (object: Object3D) { object.visible = false; });
       this._modelHidden = true;
     }
   }
   public showModel() {
     if (this._model) {
-      this.add(this._model);
+      this._model.traverse(function (object: Object3D) { object.visible = true; });
       this._modelHidden = false;
     }
   }
   public setModel(m: THREE.Mesh) {
+    this.removeHelpers();
+    
     if (this._model) {
       this.remove(this._model);
     }
-    if (this._boxHelper) {
-      this.remove(this._boxHelper);
-    }
+
     this._model = null;
-    this._boxHelper = null;
 
     if (m !== null) {
       this._model = m;
-      if (this._modelHidden) {
-        //Do not add model if we have hidden the model
-      }
-      else {
-        this.add(this._model);
+      if(Globals.isDebug()){
+        this._boxHelper = new THREE.BoxHelper(this._model, new THREE.Color(0xffff00));
       }
 
-      if (Globals.isDebug()) {
-        this._boxHelper = new THREE.BoxHelper(this._model, new THREE.Color(0xffff00));
-        this.add(this._boxHelper);
+      this.add(this._model);
+
+      if (this._modelHidden) {
+        this.hideModel();
+      }
+      else {
+        this.showModel();
       }
     }
   }
@@ -1419,17 +1551,36 @@ class Gun extends Object3D {
   private _bombTimer: WaitTimer = new WaitTimer(0.2);
   private _parentShip: Ship = null;
   private _damage: number = 10;
+  private _name: string = "";
+  private _bulletSpeed: number = 90;
 
-  public bulletSpeed: number = 90;
+  get bulletSpeed(): number {
+    return this._bulletSpeed;
+  }
+  set bulletSpeed(x: number) {
+    this._bulletSpeed = x;
+  }
+  get name(): string {
+    return this._name;
+  }
+  set name(x: string) {
+    this._name = x;
+  }
   get bulletTimer(): WaitTimer {
     return this._bulletTimer;
   }
   get bombTimer(): WaitTimer {
     return this._bombTimer;
   }
-  public constructor(parentShip: Ship, speed: number, damage: number) {
+
+  private _mod: Files.Model = null;
+  set mod(m: Files.Model) { this._mod = m; }
+
+  public constructor(parentShip: Ship, speed: number, damage: number, name: string, mod: Files.Model) {
     super();
+    this._name = name.toLowerCase();
     this._parentShip = parentShip;
+    this._mod = mod;
   }
   public canFire(): boolean {
     return this._bulletTimer.ready();
@@ -1443,26 +1594,38 @@ class Gun extends Object3D {
       let v: THREE.Vector3 = new THREE.Vector3();
       this.getWorldPosition(v);
 
-      let mod: Files.Model = Files.Model.Bullet;
-      if (this._parentShip instanceof EnemyShip) {
-        mod = Files.Model.Big_Bullet;
-      }
-
+      // let mod: Files.Model = Files.Model.Bullet;
+      // if (this._parentShip instanceof EnemyShip) {
+      //   mod = Files.Model.Big_Bullet;
+      // }
       let b1: Bullet = null;
-      if (this._parentShip instanceof EnemyShip) {
-        b1 = new EnemyBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
-        if (sound) g_audio.play(Files.Audio.Shoot, Utils.getWorldPosition(this));
+      if (this._mod) {
+        if (this._parentShip instanceof EnemyShip) {
+          b1 = new EnemyBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, this._mod);
+        }
+        else if (this._parentShip instanceof PlayerShip) {
+          b1 = new PlayerBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, this._mod);
+        }
+        if (sound) {
+          g_audio.play(Files.Audio.Shoot2, Utils.getWorldPosition(this));
+        }
       }
-      else if (this._parentShip instanceof PlayerShip) {
-        b1 = new PlayerBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
-        if (sound) g_audio.play(Files.Audio.Shoot2, Utils.getWorldPosition(this));
-      }
+      // if (this._parentShip instanceof EnemyShip) {
+      //   b1 = new EnemyBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
+      //   if (sound) g_audio.play(Files.Audio.Shoot, Utils.getWorldPosition(this));
+      // }
+      // else if (this._parentShip instanceof PlayerShip) {
+      //   b1 = new PlayerBullet(this._parentShip, v, n, this.bulletSpeed, this._damage, mod);
+      //   if (sound) g_audio.play(Files.Audio.Shoot2, Utils.getWorldPosition(this));
+      // }
       this._bulletTimer.reset();
     }
   }
-  public bomb(n: Vector3): boolean {
+  //Returns a bomb if we succsessfully threw a bomb.
+  public bomb(n: Vector3): Bomb {
+    let b1: Bomb = null;
     if (this._bombTimer.ready()) {
-      let b1: Bomb = new Bomb(n);
+      b1 = new Bomb(this._parentShip, n);
 
       //shoot from gun1, why not?
       let v: THREE.Vector3 = new THREE.Vector3();
@@ -1471,9 +1634,8 @@ class Gun extends Object3D {
 
       g_audio.play(Files.Audio.Bomb_Shoot, Utils.getWorldPosition(this));
       this._bombTimer.reset();
-      return true;
     }
-    return false;
+    return b1;
   }
 }
 /**
@@ -1487,6 +1649,7 @@ class Ship extends PhysicsObject {
   private _roll: number = 0;
   private _maxroll: number = Math.PI * 0.1;
   private _maxpitch: number = Math.PI * 0.06;
+  public lastFiredBomb: Bomb = null;
 
   protected _damage = 10;
 
@@ -1497,7 +1660,7 @@ class Ship extends PhysicsObject {
   get Guns(): Array<Gun> { return this._guns; }
   set Guns(guns: Array<Gun>) { this._guns = guns; }
 
-  public constructor(sz_m: Files.Model, afterload: ModelObjectCallback) {
+  public constructor(sz_m: Files.Model, gun_model: Files.Model, afterload: ModelObjectCallback) {
     super();
 
     this._afterLoadModel = afterload;
@@ -1517,7 +1680,7 @@ class Ship extends PhysicsObject {
               let gwp: Vector3 = new Vector3();
               ob_gun.getWorldPosition(gwp);
 
-              let gun: Gun = new Gun(that, 90, that._damage);
+              let gun: Gun = new Gun(that, 90, that._damage, ob_gun.name, gun_model);
               gun.position.copy(gwp);
               if (id >= 0) {
                 that.add(gun);
@@ -1566,6 +1729,8 @@ class Ship extends PhysicsObject {
 class PlayerShip extends Ship {
   public getId(): GameObjectId { return GameObjectId.PlayerShip; }
 
+  public object_destroy_dist: number = 350;//This is the distance away from the player that objects get destroyed.  If it's too big we get lag, too shallow and you won't create enemys ships.
+
   public bombs: number = 3;
   public maxbombs: number = 3;
   public score: number = 0;
@@ -1584,8 +1749,7 @@ class PlayerShip extends Ship {
   public ShipLevel: number = 0;
 
   public constructor() {
-    super(Files.Model.Player_Ship, function (ob: PhysicsObject, m: THREE.Mesh) {
-      ob.Color = (ob as PlayerShip).getColorForShipLevel((ob as PlayerShip).ShipLevel);
+    super(Files.Model.Player_Ship, Files.Model.Bullet, function (ob: PhysicsObject, m: THREE.Mesh) {
       //Set level to 1 and set all values.
       //Only callable after our model has loaded since guns need to be tehre.
       (ob as PlayerShip).levelUp();
@@ -1624,7 +1788,11 @@ class PlayerShip extends Ship {
   }
   public levelUp(): void {
     this.ShipLevel += 1;
-    this.Color = this.getColorForShipLevel(this.ShipLevel);
+    let cc: Color = this.getColorForShipLevel(this.ShipLevel);
+    if (!this.setColor(cc, 'MainObject')) {
+      Globals.logError("could not set mesh color for ship");
+
+    }
 
     this._damage = 5 + this.ShipLevel * 5;
     if (this.ShipLevel === 1) {
@@ -1766,10 +1934,18 @@ class PlayerShip extends Ship {
     if (this.bombs > 0 && g.canFire()) {
       let n = new THREE.Vector3();
       g_camera.getWorldDirection(n);
-      if (g.bomb(n)) {
-        this.bombs -= 1;
-      }
 
+      if (this.lastFiredBomb) {
+        //Blow up the bomb.
+        this.lastFiredBomb.trigger();
+        this.lastFiredBomb = null;
+      }
+      else {
+        this.lastFiredBomb = g.bomb(n);
+        if (this.lastFiredBomb !== null) {
+          this.bombs -= 1;
+        }
+      }
     }
     else {
       g_audio.play(Files.Audio.Nope, Utils.getWorldPosition(this));
@@ -1780,32 +1956,42 @@ class PlayerShip extends Ship {
   }
 }
 class EnemyShip extends Ship {
-  public getId(): GameObjectId { return GameObjectId.EnemyShip; }
-
   private _droprate: number = 0;
   private _fireTimers: Array<Timer>;
   private _points: number = 0;
   private _numdrops: number = 0;
 
+  protected get fireTimers(): Array<Timer> { return this._fireTimers; }
+  protected set fireTimers(x: Array<Timer>) { this._fireTimers = x; }
+  public getId(): GameObjectId { return GameObjectId.EnemyShip; }
+
   get Points(): number { return this._points; }
 
-  public constructor(model: Files.Model, health: number, droprate: number, numdrops: number, firetime: IAFloat, points: number) {
-    super(model, function (ob: PhysicsObject, m: THREE.Mesh) {
+  public constructor(model: Files.Model, bullet_model: Files.Model, health: number, droprate: number, numdrops: number, firetime: IAFloat, points: number, autoguns: boolean = true, afterload: ModelObjectCallback = null) {
+    super(model, bullet_model, function (ob: PhysicsObject, m: THREE.Mesh) {
       //Set bullet speed for all guns for enemy ships to be a little slower.
       if (ob instanceof EnemyShip) {
         ob.setBulletSpeed(45);
       }
       let es = ob as EnemyShip;
       if (es) {
-        es._fireTimers = new Array<Timer>();
-        for (let gi = 0; gi < es.Guns.length; ++gi) {
-          let t: Timer = new Timer(firetime.calc(), function () {
-            es.fireGun(es.Guns[gi]);
-            t.Interval = firetime.calc();
-          });
-          es._fireTimers.push(t);
+        if (autoguns) {
+          es._fireTimers = new Array<Timer>();
+          for (let gi = 0; gi < es.Guns.length; ++gi) {
+            let t: Timer = new Timer(firetime.calc(), function () {
+              if (g_gameState !== GameState.GameOver) {
+                es.fireGun(es.Guns[gi]);
+                t.Interval = firetime.calc();
+              }
+            });
+            es._fireTimers.push(t);
+          }
         }
       }
+
+      //Fade-In
+      es.opacity = 0.01;
+      es.OpacityDelta = 0.6;
     });
     this._points = points;
     this.health = health;
@@ -1821,7 +2007,19 @@ class EnemyShip extends Ship {
       me.health -= 100;
       me.checkHealth();
     });
+    g_physics.collisions.collide(GameObjectId.EnemyShip, GameObjectId.Bomb, function (me: EnemyShip, other: Bomb) {
+      other.trigger();
+    });
   }
+  public update(dt: number) {
+    super.update(dt);
+    if (this._fireTimers) {
+      for (let i = 0; i < this._fireTimers.length; ++i) {
+        this._fireTimers[i].update(dt);
+      }
+    }
+  }
+
   protected checkHealth() {
     if (this.health <= 0) {
       this.health = 0;
@@ -1865,14 +2063,7 @@ class EnemyShip extends Ship {
     g.fire(dir);
   }
 
-  public update(dt: number) {
-    super.update(dt);
-    let that = this;
-    for (let i = 0; i < this._fireTimers.length; ++i) {
-      this._fireTimers[i].update(dt);
-    }
 
-  }
 }
 /**
  * The boss has 3 states.
@@ -1881,6 +2072,7 @@ class EnemyShip extends Ship {
  * 3. cooldown.
  */
 enum BossState { None, Fire, Spin, Cooldown }
+enum BossGun { Small, Med, Big }
 class Boss extends EnemyShip {
   public getId(): GameObjectId { return GameObjectId.Boss; }
 
@@ -1888,8 +2080,83 @@ class Boss extends EnemyShip {
   private _eState: BossState = BossState.Fire;
   private _posSaved: Vector3 = new Vector3();
 
+  private _gunTimerMap: Map<Timer, Gun> = new Map<Timer, Gun>();
+
+  public triggerGuns(t: BossGun, start: boolean) {
+    for (let i = 0; i < this.fireTimers.length; ++i) {
+      let g: Gun = this._gunTimerMap.get(this.fireTimers[i]);
+      if (g) {
+        if (this.gunType(this.Guns[i]) === t) {
+          let timer: Timer = this.fireTimers[i];
+          if (start) {
+            timer.start();
+          }
+          else {
+            timer.pause();
+          }
+        }
+      }
+    }
+  }
+  public gunType(g: Gun): BossGun {
+    let i: number = g.name.indexOf('gun');
+    if (i >= 0 && g.name.length >= 6) {
+      let type: string = g.name.substr(i, 3).toLowerCase();
+      if (type === 'smm') {
+        return BossGun.Small;
+      }
+      else if (type === 'big') {
+        return BossGun.Big;
+      }
+      else if (type === 'med') {
+        return BossGun.Med;
+      }
+    }
+    return null;
+  }
   public constructor() {
-    super(Files.Model.Boss, 2000, 100, 3, new IAFloat(3000, 10000), 100);
+    super(Files.Model.Boss, null, 2000, 100, 3, new IAFloat(3000, 10000), 100, false, function (ob: PhysicsObject, mod: THREE.Mesh) {
+      //Override the default enemy ship fireGun
+      let es = ob as Boss;
+
+      //Boss Guns
+      es.fireTimers = new Array<Timer>();
+      for (let gi = 0; gi < es.Guns.length; ++gi) {
+        let g: Gun = es.Guns[gi];
+        let type: BossGun = es.gunType(g);
+
+        let interval: number = -1;
+
+        //classify the gun
+        if (type === BossGun.Small) {
+          interval = Random.float(1000, 2000);
+          g.mod = Files.Model.Boss_Missile;
+        }
+        else if (type === BossGun.Big) {
+          interval = Random.float(5000, 7000);
+          g.mod = Files.Model.Boss_Bomb_Bullet;
+        }
+        else if (type === BossGun.Med) {
+          interval = Random.float(3000, 7000);
+          g.mod = Files.Model.Boss_Bomb_Plus;
+        }
+
+        if (interval > 100) {
+          let t: Timer = new Timer(interval, function () {
+            if (g_gameState !== GameState.GameOver) {
+              es.fireGun(es.Guns[gi]);
+            }
+          });
+          es.fireTimers.push(t);
+          es._gunTimerMap.set(t, g);
+        }
+      }
+
+      //After loading the model, then set the state.
+      es._eState = BossState.Cooldown;
+      es.triggerState();
+
+    });
 
     this.health = 1000;
     this.DestroyCheck = function (ob: PhysicsObject) {
@@ -1925,39 +2192,54 @@ class Boss extends EnemyShip {
   }
   public update(dt: number) {
     super.update(dt);
-    this.updateState(dt);
+    this.changeState(dt);
     this.perform(dt);
   }
-  private updateState(dt: number) {
+  private changeState(dt: number) {
     if (this._stateTimer.update(dt)) {
-      if (this._eState === BossState.Fire) {
-        //reset transform.
-        this._posSaved.copy(this.position);
-        this._eState = BossState.Spin;
-        this._stateTimer.interval = 7;//spin 7s
-      }
-      else if (this._eState === BossState.Spin) {
-        this._eState = BossState.Cooldown;
-        this._stateTimer.interval = 12;//cooldown 12s
-      }
-      else if (this._eState === BossState.Cooldown) {
-        //Restore state
-        this._eState = BossState.Fire;
-        this.position.copy(this._posSaved);
-        this.scale.set(1, 1, 1);
-        this._stateTimer.interval = 12; // fire 12s
-      }
-      else {
-        Globals.logError("Undefined boss state. " + this._eState);
-      }
+      this.triggerState();
       this._stateTimer.reset();
     }
   }
+  private triggerState() {
+    if (this._eState === BossState.Fire) {
+      //Start spinning
+      this._posSaved.copy(this.position);
+      this._eState = BossState.Spin;
+      this._stateTimer.interval = 7;//spin 7s
+      this.triggerGuns(BossGun.Big, false);
+      this.triggerGuns(BossGun.Med, false);
+      this.triggerGuns(BossGun.Small, true);
+    }
+    else if (this._eState === BossState.Spin) {
+      //Cooldown / Pause
+      this._eState = BossState.Cooldown;
+      this._stateTimer.interval = 12;//cooldown 12s
+      this.triggerGuns(BossGun.Big, false);
+      this.triggerGuns(BossGun.Med, false);
+      this.triggerGuns(BossGun.Small, false);
+    }
+    else if (this._eState === BossState.Cooldown) {
+      //Start Firing the big guns Again
+      this._eState = BossState.Fire;
+      this.position.copy(this._posSaved);
+      this.scale.set(1, 1, 1);
+      this._stateTimer.interval = 12; // fire 12s
+      this.triggerGuns(BossGun.Big, true);
+      this.triggerGuns(BossGun.Med, false);
+      this.triggerGuns(BossGun.Small, false);
+    }
+    else {
+      Globals.logError("Undefined boss state. " + this._eState);
+    }
+  }
+
   private _rz: number = 0;
   private _rotNormal: Vector3 = new Vector3();
+
   private perform(dt: number) {
     const revspeed = Math.PI * 0.9;
-    const turnspeed = Math.PI * 0.9;
+    const turnspeed = Math.PI * 1.19;
 
     if (this._eState === BossState.Fire) {
       //rotate towards player slowly.
@@ -2015,7 +2297,7 @@ class Projectile extends PhysicsObject {
         }
       }
       else {
-        Globals.logError("Could not find model" + model);
+        Globals.logError("Could not find model" + model + " while loading " + model);
       }
     });
 
@@ -2093,20 +2375,36 @@ class Bullet extends Projectile {
       let c: Color = null;
       if (firer instanceof PlayerShip) {
         c = g_player.getColorForShipLevel(g_player.ShipLevel);;
+        that.color = c.clone();
+        g_particles.createBlasterParticlels(position, c);
       }
       else {
-        c = new Color(0.1, 0.99193, 0.16134);
+       // c = new Color(0.1, 0.99193, 0.16134);
       }
-      that.Color = c.clone();
-      g_particles.createBlasterParticlels(position, c);
 
-      that.Opacity = 0.6;
+    //  that.opacity = 0.6;
       that.position.copy(position);
     });
     let that = this;
 
     this.Firer = firer;
     this.Damage = damage;
+
+    //Make these guys rotate.
+    if (mod === Files.Model.Boss_Bomb_Plus || mod === Files.Model.Spacejunk_Bullet) {
+      this.RotationDelta.y = Math.PI * 0.25;
+      this.RotationDelta.z = Math.PI * 0.25;
+    }
+    else if (mod === Files.Model.Triple_Bullet) {
+     // this.RotationDelta.z = Math.PI * 0.570;
+    }
+    else if (mod === Files.Model.Boss_Bomb_Bullet) {
+      this.RotationDelta.z = Math.PI * 0.870;
+    }
+    else if (mod === Files.Model.Boss_Missile) {
+      this.RotationDelta.z = Math.PI * 1.170;
+    }
+
   }
 }
 class EnemyBullet extends Bullet {
@@ -2127,25 +2425,27 @@ class PlayerBullet extends Bullet {
 }
 class Bomb extends Projectile {
   public getId(): GameObjectId { return GameObjectId.Bomb; }
+  private _creator: Ship = null;
 
-  private _boomtimer: WaitTimer = new WaitTimer(2.5);
-
-  public constructor(direction: Vector3) {
+  public constructor(creator: Ship, direction: Vector3) {
     super(55, direction, Files.Model.Bomb, function (that: PhysicsObject, m: THREE.Mesh) {
-      that.Opacity = 0.6;
+      that.opacity = 0.6;
     });
     this.RotationDelta.x = Math.PI;
     this.rotation.z = Math.PI;
+    this.OnDestroy = function (ob: PhysicsObject) {
+      g_audio.play(Files.Audio.Bomb, Utils.getWorldPosition(ob));
+      let exp: BombExplosion = new BombExplosion(ob.position);
+      if (creator !== null) {
+        creator.lastFiredBomb = null;
+      }
+    }
+  }
+  public trigger() {
+    this.destroy();
   }
   public update(dt: number) {
     super.update(dt);
-    this._boomtimer.update(dt);
-    if (this._boomtimer.ready()) {
-      g_audio.play(Files.Audio.Bomb, Utils.getWorldPosition(this));
-      let exp: BombExplosion = new BombExplosion(this.position);
-
-      this.destroy();
-    }
   }
 }
 class BombExplosion extends Projectile {
@@ -2167,7 +2467,7 @@ class BombExplosion extends Projectile {
     this.scale.y = 0.01 + this._dietimer.time01 * scale;
     this.scale.z = 0.01 + this._dietimer.time01 * scale;
     // this.rotation.y = this._dietimer.time01 * (Math.PI * 4.9378);
-    this.Opacity = 1 - this._dietimer.time01;
+    this.opacity = 1 - this._dietimer.time01;
 
     if (this._dietimer.ready()) {
       this.destroy();
@@ -2216,6 +2516,7 @@ class Starfield extends THREE.Object3D {
   // private _starMesh: THREE.Mesh = null;
   //Stars relative to player.
   private _starScale: IAFloat = new IAFloat(0.2, 2);
+  private _starbox_dist_z = 900;
   private _starBox: IAVec3 = new IAVec3(new Vector3(-900, -900, -900), new THREE.Vector3(900, 900, 600));
   //Area around player we don't want to make stars
   private _nogo: THREE.Box3 = new THREE.Box3(new Vector3(-200, -200, -200), new Vector3(200, 200, 200));
@@ -2225,17 +2526,18 @@ class Starfield extends THREE.Object3D {
   public constructor() {               //rtop rbottom height rsegments hsegments openended
     super();
 
-
     //Make a bunch of stars.
     for (let i = 0; i < this._maxStars; ++i) {
       this.tryMakeStar(true);
     }
   }
   public update(dt: number) {
+    let w: Vector3 = g_player.WorldPosition;
     //Check for dead stars.
     for (let iStar = this._stars.length - 1; iStar >= 0; iStar--) {
       let star: THREE.Mesh = this._stars[iStar];
-      if (star.position.z - g_player.position.z >= 20) {
+      this._stars[iStar].position.z += dt * 90;
+      if (star.position.z - w.z >= 60) {
         this._stars.splice(iStar, 1);
         g_physics.Scene.remove(star);
       }
@@ -2261,10 +2563,11 @@ class Starfield extends THREE.Object3D {
     let player_pos: Vector3 = g_player.WorldPosition.clone();
     for (let iTry = 0; iTry < 255; ++iTry) {
       pos = this._starBox.calc();
-      if (z == false) {
-        //If z is false, place the star at the edge of the player's view, which is negative
-        pos.z = this._starBox.Min.z;
-      }
+      // if (z == false) {
+      //This is causing all stars to 'line up'
+      //   //If z is false, place the star at the edge of the player's view, which is negative
+      //   pos.z = this._starBox.Min.z;
+      // }
       if (this._nogo.containsPoint(pos)) {
         continue;
       }
@@ -2292,10 +2595,10 @@ class Starfield extends THREE.Object3D {
     star.position.copy(pos);
     let s: number = this._starScale.calc();
 
-    let d = Math.pow(Utils.clampScalar(pos.clone().sub(g_player.WorldPosition).length() + 30 / 900, 0, 1),2);
+    let d = Math.pow(Utils.clampScalar(pos.clone().sub(g_player.WorldPosition).length() / 100, 0, 1), 2);
     let warp = Random.float(0, 20);
 
-    star.scale.set(s, s, s  + warp);
+    star.scale.set(s, s, s + warp);
     let c: THREE.Color = new THREE.Color();
     let r: number = Random.float(0, 1);
     if (r > 0.9) { c.r = 158 / 255; c.g = 231 / 255; c.b = 254 / 255; }//light blue
@@ -2305,6 +2608,9 @@ class Starfield extends THREE.Object3D {
     else if (r > 0.1) { c.r = 234 / 255; c.g = 156 / 255; c.b = 250 / 255; }//pinkish
     else if (r >= 0.0) { c.r = 252 / 255; c.g = 203 / 255; c.b = 112 / 255; }//orangish
     (star.material as THREE.MeshBasicMaterial).color.set(c);
+    (star.material as THREE.MeshBasicMaterial).transparent = true;
+    (star.material as THREE.MeshBasicMaterial).opacity = 0.6;//0.7*d;//Random.float(0.2,0.7);
+
     return star;
   }
 
@@ -2444,7 +2750,8 @@ class AudioManager {
       that._cache[file][0].play();
 
     }, function (xhr: any) {
-      Globals.logDebug(" " + file + " loading " + xhr)
+      //Do not log this was causing lag
+      // Globals.logDebug(" " + file + " loading " + xhr)
     }, function (err: any) {
       Globals.logError('Error loading  sound ' + file + " : " + err);
     });
@@ -2469,7 +2776,8 @@ class AudioManager {
         ret.play();
         that._music[file] = new AsyncMusic(ret);
       }, function (xhr: any) {
-        Globals.logDebug(" " + music_file + " loading " + xhr)
+        //Do not log this was causing lag
+        //  Globals.logDebug(" " + music_file + " loading " + xhr)
       }, function (err: any) {
         Globals.logError('Error loading  sound ' + music_file + " : " + err);
       });
@@ -2545,12 +2853,18 @@ class ModelManager {
       this.loadShip(Files.Model.Enemy_Ship);
       this.loadShip(Files.Model.Enemy_Ship2);
       this.loadShip(Files.Model.Enemy_Ship3);
+      this.loadShip(Files.Model.Enemy_Ship4);
 
       this.loadItem(Files.Model.Big_Bullet);
       this.loadItem(Files.Model.Bullet);
       this.loadItem(Files.Model.Bomb);
       this.loadItem(Files.Model.Bomb_Explosion, false);
       this.loadItem(Files.Model.Item, true, new Vector3(1, 1, 1));
+      this.loadItem(Files.Model.Boss_Bomb_Bullet, true, new Vector3(1, 1, 1));
+      this.loadItem(Files.Model.Boss_Bomb_Plus, true, new Vector3(1, 1, 1));
+      this.loadItem(Files.Model.Boss_Missile, true, new Vector3(1, 1, 1));
+      this.loadItem(Files.Model.Triple_Bullet, true, new Vector3(1, 1, 1));
+      this.loadItem(Files.Model.Spacejunk_Bullet, true, new Vector3(1, 1, 1));
     }
     catch (e) {
       Globals.logError("Failed to load one or more models: " + e);
@@ -2619,7 +2933,7 @@ class ModelManager {
 
           let obj = gltf.scene.getObjectByName(sz);
           if (!obj) {
-            Globals.logError("Could not find model " + sz);
+            Globals.logError("Could not find model " + sz + " while loading " + filename);
             success = false;
           }
           else {
@@ -2640,7 +2954,9 @@ class ModelManager {
         try {
           if (that._callbacks[szfile] != null) {
             let mesh = obj as THREE.Mesh; // Must cast to mesh
-            for (let ci = that._callbacks[szfile].length - 1; ci >= 0; ci--) {
+            //We must loop in this order to call first callbacks first.
+            for (let ci = 0; ci < that._callbacks[szfile].length; ci++)//that._callbacks[szfile].length - 1; ci >= 0; ci--) 
+            {
               if (that._callbacks[szfile][ci]) {
                 that._callbacks[szfile][ci](mesh);
               }
@@ -2652,7 +2968,7 @@ class ModelManager {
           }
         }
         catch (e) {
-          Globals.logError("exception thrown executing model load callbacks: " + e);
+          Globals.logError("exception thrown executing model load callbacks: " + e + "\r\n" + "stack: " + e.stack);
         }
         Globals.logDebug('...loaded model "' + filename + '" -- success.');
       },
@@ -2750,7 +3066,7 @@ class Particles {
       p.RotationDelta.copy(params.Rotation_Delta);
       p.ScaleDelta.copy(params.Scale_Delta);
       p.position.copy(params.Position);
-      p.Color = Utils.vec3ToColor(params.Color.calc());
+      p.color = Utils.vec3ToColor(params.Color.calc());
       let sv: Vector3 = params.InitialScale.calc();
       if (params.UniformScale) {
         sv.x = sv.y = sv.z;
@@ -2875,6 +3191,7 @@ let g_gameState: GameState = GameState.Title;
 
 let g_gameTitle: string = $('#gametitle').html();
 
+const g_canvas: HTMLCanvasElement = document.querySelector('#page_canvas');
 let g_prof: Prof = null;
 let g_input: Input = null;
 let g_pointlight: THREE.PointLight = null;
@@ -2884,7 +3201,6 @@ let g_ambientlight: THREE.AmbientLight = null;
 let g_camera: THREE.PerspectiveCamera = null;
 
 let g_physics: PhysicsManager = null;
-
 let gui: dat.GUI = null;
 
 let axis: THREE.AxesHelper = null;
@@ -2912,9 +3228,37 @@ let g_composer: EffectComposer = null;
 let g_ssaaRenderpass: SSAARenderPass = null;
 let g_copyPass: ShaderPass = null;
 
+enum WebGLVersion { WebGL1, WebGL2 }
+let g_webGLVersion = WebGLVersion.WebGL1;
+
 $(document).ready(function () {
   Globals.setFlags(document.location);
   window.addEventListener('resize', function () {
+
+    //if in VR, the "presenting" will cause an error if you try to do this.
+    if (Globals.vrDeviceIsPresenting() === false) {
+      //WebGL1 does not support non pow2 textures.
+      if (g_webGLVersion === WebGLVersion.WebGL2) {
+        //https://stackoverflow.com/questions/19827030/renderer-setsize-calculation-by-percent-of-screen-three-js
+        const canvas = g_renderer.domElement;
+        const pixelRatio = window.devicePixelRatio;
+        const width = canvas.clientWidth * pixelRatio | 0;
+        const height = canvas.clientHeight * pixelRatio | 0;
+        const needResize = canvas.width !== width || canvas.height !== height;
+
+        if (needResize) {
+          g_renderer.setSize(width, height, false);
+        }
+
+        if (needResize) {
+          g_camera.aspect = canvas.clientWidth / canvas.clientHeight;
+          g_camera.updateProjectionMatrix();
+        }
+
+      }
+    }
+
+
     //This should cause the resize method to fire.
     $("#page_canvas").width(window.innerWidth);
     $("#page_canvas").height(window.innerHeight);
@@ -2924,14 +3268,25 @@ $(document).ready(function () {
   $('#outPopUp').hide();
   gameLoop();
 });
-function initGame(): void {
-  g_prof = new Prof();
-  g_prof.frameStart();
+function createWebGL2Context() {
+  //So, THREE has less capabilities if it's not using webgl2
+  //we must use webgl2 to prevent erroneous texture resizing (pow2 only textures)
+  //@ts-ignore:
+  let webgl2_available: boolean = !!(window.WebGL2RenderingContext && g_canvas.getContext('webgl2'));
 
-  //Recreates the renderer (user can toggle VR off)
-  const canvas: HTMLCanvasElement = document.querySelector('#page_canvas');
+  if (webgl2_available === false) {
+    Globals.logWarn(WEBGL.getWebGL2ErrorMessage());
+    g_renderer = new THREE.WebGLRenderer({ canvas: g_canvas });//You can pass canvas in here
+    g_webGLVersion = WebGLVersion.WebGL1;
+  }
+  else {
+    let context: WebGL2RenderingContext = g_canvas.getContext('webgl2', { alpha: false });
 
-  g_renderer = new THREE.WebGLRenderer({ canvas });//You can pass canvas in here
+    //@ts-ignore:
+    g_renderer = new THREE.WebGLRenderer({ canvas: g_canvas, context: context });
+    g_webGLVersion = WebGLVersion.WebGL2;
+  }
+  Globals.logInfo("***Created " + g_webGLVersion + " context.***")
   g_renderer.setClearColor(0xffffff, 1);
   g_renderer.setPixelRatio(window.devicePixelRatio);
   if (Globals.VRSupported()) {
@@ -2952,8 +3307,14 @@ function initGame(): void {
   else {
     document.body.appendChild(g_renderer.domElement);
   }
+}
+function initGame(): void {
+  g_prof = new Prof();
+  g_prof.frameStart();
 
-  g_screen = new Screen(canvas);
+  createWebGL2Context();
+
+  g_screen = new Screen(g_canvas);
 
   g_physics = new PhysicsManager();
 
@@ -2976,14 +3337,9 @@ function initGame(): void {
     g_physics.Scene.add(axis);
   }
 
-  //loadMusic();
-
   createPlayer();
 
   showTitle();
-
-
-  // startGame();
 
   g_starfield = new Starfield();
 
@@ -3108,6 +3464,8 @@ class ShipProb {
   public firetime: IAFloat = new IAFloat(3000, 5000);
   public health: number = 10;
   public points: number = 0;
+  public bullet: Files.Model = Files.Model.Big_Bullet;
+  public ship: Files.Model = Files.Model.Big_Bullet;
 }
 function createEnemies() {
   let nShips = 1;
@@ -3115,28 +3473,48 @@ function createEnemies() {
   for (let i = 0; i < nShips; ++i) {
     let ships: Dictionary<ShipProb> = {};
 
-    ships[Files.Model.Enemy_Ship] = { prob: 0.4, points: 2, health: 80, speed_base: 13, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3), droprate: 20, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)), firetime: new IAFloat(3000, 5000) };//{prob:0.4};
-    ships[Files.Model.Enemy_Ship2] = { prob: 0.6, points: 4, health: 350, speed_base: 5, speed: new IAFloat(0, 3), scale: new Vector3(1, 1, 1), droprate: 80, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)), firetime: new IAFloat(5000, 9000) };
-    ships[Files.Model.Enemy_Ship3] = { prob: 1.0, points: 3, health: 50, speed_base: 20, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1), droprate: 30, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.2), new Vector3(0, 0, Math.PI * 1.3)), firetime: new IAFloat(1000, 5000) };
+    ships[Files.Model.Enemy_Ship] = {
+      prob: 0.5, points: 2, health: 80, speed_base: 19, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3),
+      droprate: 20, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)),
+      firetime: new IAFloat(6000, 12000), bullet: Files.Model.Big_Bullet, ship: Files.Model.Enemy_Ship
+    };
+    ships[Files.Model.Enemy_Ship2] = {
+      prob: 0.2, points: 4, health: 350, speed_base: 12, speed: new IAFloat(0, 3), scale: new Vector3(1, 1, 1),
+      droprate: 80, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)),
+      firetime: new IAFloat(7000, 12000), bullet: Files.Model.Spacejunk_Bullet, ship: Files.Model.Enemy_Ship2
+    };
+    ships[Files.Model.Enemy_Ship3] = {
+      prob: 0.7, points: 3, health: 40, speed_base: 19, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1),
+      droprate: 30, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.2), new Vector3(0, 0, Math.PI * 1.3)),
+      firetime: new IAFloat(4000, 9000), bullet: Files.Model.Triple_Bullet, ship: Files.Model.Enemy_Ship3
+    };
+    ships[Files.Model.Enemy_Ship4] = {
+      prob: 0.85, points: 5, health: 50, speed_base: 16, speed: new IAFloat(0, 10), scale: new Vector3(2, 2, 2),
+      droprate: 40, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.0), new Vector3(0, 0, Math.PI * 0.1)),
+      firetime: new IAFloat(4000, 14000), bullet: Files.Model.Spacejunk_Bullet, ship: Files.Model.Enemy_Ship4
+    };
 
     let f: number = Random.float(0, 1);
-    let file: Files.Model = Files.Model.Enemy_Ship;
     let prob_struct: ShipProb = ships[Files.Model.Enemy_Ship];
-    for (let i = 0; i < Object.keys(ships).length; i++) {
-      let key = Object.keys(ships)[i];
 
-      if (ships[key].prob >= f) {
-        file = key as Files.Model;
-        prob_struct = ships[key];
-        break;
-      }
+    if (f >= 0.85) {
+      prob_struct = ships[Files.Model.Enemy_Ship4]
+    }
+    else if (f >= 0.7) {
+      prob_struct = ships[Files.Model.Enemy_Ship3]
+    }
+    else if (f >= 0.5) {
+      prob_struct = ships[Files.Model.Enemy_Ship]
+    }
+    else if (f >= 0.2) {
+      prob_struct = ships[Files.Model.Enemy_Ship2]
     }
 
     try {
-      let ship: EnemyShip = new EnemyShip(file, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime, prob_struct.points);
-      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-50, 50), Random.float(-13, 23), -200)));
+      let ship: EnemyShip = new EnemyShip(prob_struct.ship, prob_struct.bullet, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime, prob_struct.points);
+      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-50, 50), Random.float(-13, 23), -g_player.object_destroy_dist + 30)));
       ship.Velocity.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
-      // ship.RotationDelta.set(0, 0, Random.float(0, 1) > 0.7 ? Random.float(-3, 3) : 0);
+      ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
       ship.scale.copy(prob_struct.scale);
       ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
     }
@@ -3155,10 +3533,6 @@ function createCamera() {
   g_userGroup.add(g_camera);
   g_userGroup.position.set(0, 0.02, -0.12);
   g_userGroup.rotateY(0);
-}
-function vrDeviceIsPresenting(): boolean {
-  //You can't resize if the vr device is presenting.
-  return g_renderer.vr && g_renderer.vr.getDevice() && g_renderer.vr.getDevice().isPresenting;
 }
 
 class ProfFrame {
@@ -3297,14 +3671,6 @@ function gameLoop() {
       delta = time - last_time;
       last_time = time;
 
-      if (vrDeviceIsPresenting() == false) {
-        if (resizeRendererToDisplaySize(g_renderer)) {
-          const canvas = g_renderer.domElement;
-          g_camera.aspect = canvas.clientWidth / canvas.clientHeight;
-          g_camera.updateProjectionMatrix();
-        }
-      }
-
       if (g_gameState === GameState.Title) {
         listenForGameStart();
       }
@@ -3391,18 +3757,6 @@ function updateUI() {
   }
 
 }
-function resizeRendererToDisplaySize(renderer: THREE.WebGLRenderer) {
-  const canvas = renderer.domElement;
-  const pixelRatio = window.devicePixelRatio;
-  const width = canvas.clientWidth * pixelRatio | 0;
-  const height = canvas.clientHeight * pixelRatio | 0;
-  const needResize = canvas.width !== width || canvas.height !== height;
-  if (needResize) {
-    renderer.setSize(width, height, false);
-  }
-  return needResize;
-}
-
 function createScene() {
   let szGrid = 'dat/img/grd.png';
   let szStar = 'dat/img/starfield_0.png';
@@ -3498,7 +3852,7 @@ function createUIText(player: PlayerShip): void {
   g_titleHeader = new TextCanvas(opts);
   g_titleHeader.showWireframe(Globals.isDebug());
   g_titleHeader.AlignToScreen = true;
-  g_titleHeader.ScreenX = 0.3;
+  g_titleHeader.ScreenX = Globals.userIsInVR() ? 0.3 : -0.4;
   g_titleHeader.ScreenY = 0.1;
   g_titleHeader.ScreenZ = 8;
   player.add(g_titleHeader);
@@ -3526,7 +3880,7 @@ function createUIText(player: PlayerShip): void {
   g_titleSub = new TextCanvas(opts);
   g_titleSub.showWireframe(Globals.isDebug());
   g_titleSub.AlignToScreen = true;
-  g_titleSub.ScreenX = 0.5;
+  g_titleSub.ScreenX = Globals.userIsInVR() ? 0.5 : -0.3;
   g_titleSub.ScreenY = bvr ? 0.5 : 0.6;
   g_titleSub.ScreenZ = 8;
   player.add(g_titleSub);
