@@ -2771,7 +2771,7 @@ class AudioManager {
       that._bufferCache[file] = buffer;
       that._cache[file] = new Array<THREE.PositionalAudio>();
       let a: THREE.PositionalAudio = new THREE.PositionalAudio(that._listener);
-      
+
       a.setBuffer(buffer);
       a.setRefDistance(that.calcSoundDist(pos));
       a.setMaxDistance(that._maxDist);
@@ -3549,9 +3549,34 @@ function createEnemies() {
 
     try {
       let ship: EnemyShip = new EnemyShip(prob_struct.ship, prob_struct.bullet, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime, prob_struct.points);
-      ship.position.copy(g_player.position.clone().add(new Vector3(Random.float(-50, 50), Random.float(-13, 23), -g_player.object_destroy_dist + 30)));
-      ship.Velocity.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
-      ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
+
+      let relative_pos: Vector3 = new Vector3(0, 0, 0);
+      let vel:Vector3 = new Vector3(0,0,0);
+      if (Random.float(0, 1) > 0.75) {
+        //Horizontal 
+        let leftOrRight : number = (Random.float(0,1) >=0.5) ? -1 : 1;
+        
+        let random_depth :number = -Random.float((g_player.object_destroy_dist-10) *0.7, (g_player.object_destroy_dist-10));
+
+        relative_pos = new Vector3(140 * -leftOrRight, Random.float(-13, 23), random_depth);
+        
+        //For vel, at least add *some* z velocity so that the ship eventually disappears
+        vel.set((prob_struct.speed_base + prob_struct.speed.calc()) * leftOrRight, 0, prob_struct.speed_base);
+
+        if(leftOrRight>0){
+          ship.rotation.y = Math.PI/2;
+        }
+        else{
+          ship.rotation.y = -Math.PI/2;
+        }
+      }
+      else {
+        relative_pos = new Vector3(Random.float(-50, 50), Random.float(-13, 23), -g_player.object_destroy_dist + 30);
+        vel.set(0, 0, prob_struct.speed_base + prob_struct.speed.calc());
+      }
+
+      ship.position.copy(g_player.position.clone().add(relative_pos));
+      ship.Velocity.copy(vel);
       ship.scale.copy(prob_struct.scale);
       ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
     }
