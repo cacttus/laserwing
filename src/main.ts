@@ -1642,12 +1642,7 @@ class Gun extends Object3D {
  * @brief Spaceship class representing both player and enemy ship.
  * */
 class Ship extends PhysicsObject {
-  private _pitch: number = 0;
-  private _strafeSpeed: number = 12;
-  private _liftSpeed: number = 12;
-  private _roll: number = 0;
-  private _maxroll: number = Math.PI * 0.1;
-  private _maxpitch: number = Math.PI * 0.06;
+
   public lastFiredBomb: Bomb = null;
 
   protected _damage = 10;
@@ -1695,14 +1690,7 @@ class Ship extends PhysicsObject {
       }
     });
   }
-  public moveLeftRight(dt: number, xaxis: number) {
-    this.position.x += this._strafeSpeed * xaxis * dt;
-    this._roll = this._maxroll * xaxis * -1;
-  }
-  public moveUpDown(dt: number, yaxis: number) {
-    this.position.y += this._liftSpeed * yaxis * dt;
-    this._pitch = this._maxpitch * yaxis;
-  }
+
   public bulletDamage(b: Bullet) {
     this.health -= b.Damage;
     g_audio.play(Files.Audio.Ship_Hit, Utils.getWorldPosition(this));
@@ -1715,8 +1703,8 @@ class Ship extends PhysicsObject {
     for (let gi: number = 0; gi < this._guns.length; ++gi) {
       this._guns[gi].update(dt);
     }
-    this.rotation.x = this._pitch;
-    this.rotation.z = this._roll;
+
+
   }
   protected setBulletSpeed(s: number) {
     for (let gi = 0; gi < this.Guns.length; ++gi) {
@@ -1729,7 +1717,12 @@ class PlayerShip extends Ship {
   public getId(): GameObjectId { return GameObjectId.PlayerShip; }
 
   public object_destroy_dist: number = 350;//This is the distance away from the player that objects get destroyed.  If it's too big we get lag, too shallow and you won't create enemys ships.
-
+  private _strafeSpeed: number = 12;
+  private _liftSpeed: number = 12;
+  private _pitch: number = 0;
+  private _roll: number = 0;
+  private _maxroll: number = Math.PI * 0.1;
+  private _maxpitch: number = Math.PI * 0.06;
   public bombs: number = 3;
   public maxbombs: number = 3;
   public score: number = 0;
@@ -1908,7 +1901,20 @@ class PlayerShip extends Ship {
       }
     }
     super.update(dt);
+
+    this.rotation.x = this._pitch;
+    this.rotation.z = this._roll;
   }
+
+  public moveLeftRight(dt: number, xaxis: number) {
+    this.position.x += this._strafeSpeed * xaxis * dt;
+    this._roll = this._maxroll * xaxis * -1;
+  }
+  public moveUpDown(dt: number, yaxis: number) {
+    this.position.y += this._liftSpeed * yaxis * dt;
+    this._pitch = this._maxpitch * yaxis;
+  }
+
   private tryFireGun(g: Gun, target_pos: Vector3, sound: boolean = true): void {
     if (g.canFire()) {
       if (Globals.userIsInVR()) {
@@ -3508,13 +3514,13 @@ class ShipProb {
 function getNumEnemiesForShipLevel(): number {
   let nShips = 1;
   //Increase Difficulty as ship levels
-  if (g_player.ShipLevel <=3) {
+  if (g_player.ShipLevel <= 3) {
     nShips = (Random.float(0, 1) > 0.8) ? 2 : 1;
   }
-  else if (g_player.ShipLevel <=5) {
+  else if (g_player.ShipLevel <= 5) {
     nShips = (Random.float(0, 1) > 0.5) ? 2 : 1;
   }
-  else if (g_player.ShipLevel <=7) {
+  else if (g_player.ShipLevel <= 7) {
     nShips = (Random.float(0, 1) > 0.6) ? 3 : 2;
   }
   else {
@@ -3530,7 +3536,7 @@ function createEnemies() {
 
     ships[Files.Model.Enemy_Ship] = {
       prob: 0.5, points: 2, health: 80, speed_base: 19, speed: new IAFloat(0, 10), scale: new Vector3(3, 3.3, 3),
-      droprate: 20, rotation_delta: new IAVec3(new Vector3(0, 0, 0), new Vector3(0, 0, 0)),
+      droprate: 20, rotation_delta: new IAVec3(new Vector3(0, 0,- Math.PI * 0.5), new Vector3(0, 0, Math.PI * 0.5)),
       firetime: new IAFloat(6000, 12000), bullet: Files.Model.Big_Bullet, ship: Files.Model.Enemy_Ship
     };
     ships[Files.Model.Enemy_Ship2] = {
@@ -3540,12 +3546,12 @@ function createEnemies() {
     };
     ships[Files.Model.Enemy_Ship3] = {
       prob: 0.7, points: 3, health: 40, speed_base: 19, speed: new IAFloat(0, 10), scale: new Vector3(1, 1, 1),
-      droprate: 30, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.2), new Vector3(0, 0, Math.PI * 1.3)),
+      droprate: 30, rotation_delta: new IAVec3(new Vector3(0, 0, -Math.PI * 1.3), new Vector3(0, 0, Math.PI * 1.3)),
       firetime: new IAFloat(4000, 9000), bullet: Files.Model.Triple_Bullet, ship: Files.Model.Enemy_Ship3
     };
     ships[Files.Model.Enemy_Ship4] = {
       prob: 0.85, points: 5, health: 50, speed_base: 16, speed: new IAFloat(0, 10), scale: new Vector3(2, 2, 2),
-      droprate: 40, rotation_delta: new IAVec3(new Vector3(0, 0, Math.PI * 0.0), new Vector3(0, 0, Math.PI * 0.1)),
+      droprate: 40, rotation_delta: new IAVec3(new Vector3(0, 0, - Math.PI * 0.1), new Vector3(0, 0, Math.PI * 0.1)),
       firetime: new IAFloat(4000, 14000), bullet: Files.Model.Spacejunk_Bullet, ship: Files.Model.Enemy_Ship4
     };
 
@@ -3567,9 +3573,26 @@ function createEnemies() {
 
     try {
       let ship: EnemyShip = new EnemyShip(prob_struct.ship, prob_struct.bullet, prob_struct.health, 1, prob_struct.droprate, prob_struct.firetime, prob_struct.points);
-
       let relative_pos: Vector3 = new Vector3(0, 0, 0);
       let vel: Vector3 = new Vector3(0, 0, 0);
+
+      // vel.set(Random.float(-.3, .3), 0, Random.float(-1, 1));
+      // if (vel.z < 0) {
+      //   vel.z = -vel.z;
+      // }
+      // vel.normalize();
+      // let r: number = g_player.object_destroy_dist * 0.8;
+
+      // relative_pos = vel.clone().negate();
+      // relative_pos.multiplyScalar(r);
+
+      // ship.rotation.y = Math.acos(vel.dot(new Vector3(0,0,-1)));
+
+      // vel.multiplyScalar(prob_struct.speed_base + prob_struct.speed.calc());
+
+
+
+
       if (Random.float(0, 1) > 0.75) {
         //Horizontal 
         let leftOrRight: number = (Random.float(0, 1) >= 0.5) ? -1 : 1;
@@ -3596,10 +3619,13 @@ function createEnemies() {
       ship.position.copy(g_player.position.clone().add(relative_pos));
       ship.Velocity.copy(vel);
       ship.scale.copy(prob_struct.scale);
-      ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
+      if (Random.float(0, 1) > 0.25) {
+        ship.RotationDelta.copy(prob_struct.rotation_delta.calc());
+      }
+
     }
     catch (e) {
-
+      Globals.logDebug('' + e);
     }
   }
 }
