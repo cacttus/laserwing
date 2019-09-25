@@ -1931,25 +1931,27 @@ class PlayerShip extends Ship {
     }
   }
   private tryFireBomb(g: Gun, target_pos: Vector3): void {
-    if (this.bombs > 0 && g.canFire()) {
-      let n = new THREE.Vector3();
-      g_camera.getWorldDirection(n);
 
-      if (this.lastFiredBomb) {
-        //Blow up the bomb.
-        this.lastFiredBomb.trigger();
-        this.lastFiredBomb = null;
-      }
-      else {
+    let n = new THREE.Vector3();
+    g_camera.getWorldDirection(n);
+
+    if (this.lastFiredBomb) {
+      //Blow up the bomb.
+      this.lastFiredBomb.trigger();
+      this.lastFiredBomb = null;
+    }
+    else {
+      if (this.bombs > 0 && g.canFire()) {
         this.lastFiredBomb = g.bomb(n);
         if (this.lastFiredBomb !== null) {
           this.bombs -= 1;
         }
       }
+      else {
+        g_audio.play(Files.Audio.Nope, Utils.getWorldPosition(this));
+      }
     }
-    else {
-      g_audio.play(Files.Audio.Nope, Utils.getWorldPosition(this));
-    }
+
   }
   private getBulletTimeForLevel() {
     if (this.ShipLevel == 1) { }
@@ -1993,7 +1995,7 @@ class EnemyShip extends Ship {
       es.opacity = 0.01;
       es.OpacityDelta = 0.6;
 
-      if(afterload){
+      if (afterload) {
         afterload(ob, m);
       }
     });
@@ -2093,7 +2095,7 @@ class Boss extends EnemyShip {
 
       es._stateTimer = new WaitTimer(15);
       es._eState = BossState.Fire;
-      es._posSaved= new Vector3();
+      es._posSaved = new Vector3();
 
       //Boss Guns
       es.fireTimers = new Array<Timer>();
@@ -2235,7 +2237,7 @@ class Boss extends EnemyShip {
     else if (this._eState === BossState.Cooldown) {
       //Start Firing the big guns Again
       this._eState = BossState.Fire;
-      if(this._posSaved){
+      if (this._posSaved) {
         this.position.copy(this._posSaved);
       }
 
@@ -2678,6 +2680,13 @@ class AudioManager {
     else if (n > 0.3) this.mainMusicFile = this.mainMusicFile2;
     else if (n > 0.0) this.mainMusicFile = this.mainMusicFile3;
 
+    //*Had problems with positional audio - follow these steps
+    //1. add the lister to scene (camera)
+    //2. create positional audios
+    //2.1 add them to scene (somewher).
+    //2.2 set the distance and max distance of them.
+    //2.3 if you added them directly to the scene, then update their correct position.
+
     g_camera.add(this._listener);
   }
 
@@ -2707,8 +2716,11 @@ class AudioManager {
         let played: boolean = false;
         for (let ibuffer = 0; ibuffer < this._cache[szfile].length; ++ibuffer) {
           if (this._cache[szfile][ibuffer].isPlaying === false) {
+            this._cache[szfile][ibuffer].startTime = 0;
             this._cache[szfile][ibuffer].setLoop(loop);
             this._cache[szfile][ibuffer].setRefDistance(this.calcSoundDist(pos));
+            this._cache[szfile][ibuffer].setMaxDistance(this._maxDist);
+            this._cache[szfile][ibuffer].position.copy(pos);
             this._cache[szfile][ibuffer].play();
             played = true;
             break;
@@ -2720,9 +2732,12 @@ class AudioManager {
           aud.setBuffer(this._bufferCache[szfile]);
           aud.setLoop(loop);
           aud.setVolume(1);
+          aud.position.copy(pos);
+          aud.startTime = 0;
           aud.play();
           aud.setRefDistance(this.calcSoundDist(pos));
           aud.setMaxDistance(this._maxDist);
+          g_physics.Scene.add(aud);
           this._cache[szfile].push(aud);
         }
       }
@@ -2740,8 +2755,10 @@ class AudioManager {
       let dist: number = pos.clone().sub(cp).length();
 
       dist = Utils.clampScalar(this._maxDist - dist, 0, this._maxDist);
+
       let n = 0;
       n++;
+      Globals.logInfo("Sound distance: " + dist)
       return dist;
     }
     else {
@@ -2754,16 +2771,19 @@ class AudioManager {
       that._bufferCache[file] = buffer;
       that._cache[file] = new Array<THREE.PositionalAudio>();
       let a: THREE.PositionalAudio = new THREE.PositionalAudio(that._listener);
-
-
+      
+      a.setBuffer(buffer);
       a.setRefDistance(that.calcSoundDist(pos));
       a.setMaxDistance(that._maxDist);
+      a.position.copy(pos);
+      a.setLoop(loop);
+      a.setVolume(1);
+      a.startTime = 0;
+      a.play();
+
+      g_physics.Scene.add(a);
 
       that._cache[file].push(a);
-      that._cache[file][0].setBuffer(buffer);
-      that._cache[file][0].setLoop(loop);
-      that._cache[file][0].setVolume(1);
-      that._cache[file][0].play();
 
     }, function (xhr: any) {
       //Do not log this was causing lag
