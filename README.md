@@ -52,12 +52,3 @@ Artist: http://incompetech.com/
 
 Moskito., Quincas Moreira
 
-
-Fixed Boss.
-Fixed the alpha draw.
-Fixed ship colors.
-Ship Fade-In (smoother)
-Fixed starfield generation.
-Fixed laggy music loading.
-Fixed Bomb explosion (press to explode).
-Reserved placeholder geometry for debug only.

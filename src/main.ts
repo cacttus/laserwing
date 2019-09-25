@@ -425,7 +425,7 @@ class Mouse extends Vector3 {
     setInterval(function () {
       that.Left.update(that._lmbDown);
       that.Right.update(that._rmbDown);
-    });
+    }, 100);
     document.addEventListener('mouseup', function (e) {
       // e.preventDefault();
       if (e.button == 0) {
@@ -1226,7 +1226,7 @@ class MaterialDuplicate {
   }
   private checkRestoreMaterial() {
     if (this._isUniqueMaterial) {
-      if (this._isUnqiueColor===false && this._opacity === 1 && this._flashing === false) {
+      if (this._isUnqiueColor === false && this._opacity === 1 && this._flashing === false) {
         for (let key of Array.from(this._ob_to_material.keys())) {
           let m: Material = this._ob_to_material.get(key);
           key.material = m;
@@ -1505,7 +1505,7 @@ class PhysicsObject extends THREE.Object3D {
   }
   public setModel(m: THREE.Mesh) {
     this.removeHelpers();
-    
+
     if (this._model) {
       this.remove(this._model);
     }
@@ -1514,7 +1514,7 @@ class PhysicsObject extends THREE.Object3D {
 
     if (m !== null) {
       this._model = m;
-      if(Globals.isDebug()){
+      if (Globals.isDebug()) {
         this._boxHelper = new THREE.BoxHelper(this._model, new THREE.Color(0xffff00));
       }
 
@@ -1992,6 +1992,10 @@ class EnemyShip extends Ship {
       //Fade-In
       es.opacity = 0.01;
       es.OpacityDelta = 0.6;
+
+      if(afterload){
+        afterload(ob, m);
+      }
     });
     this._points = points;
     this.health = health;
@@ -2082,42 +2086,14 @@ class Boss extends EnemyShip {
 
   private _gunTimerMap: Map<Timer, Gun> = new Map<Timer, Gun>();
 
-  public triggerGuns(t: BossGun, start: boolean) {
-    for (let i = 0; i < this.fireTimers.length; ++i) {
-      let g: Gun = this._gunTimerMap.get(this.fireTimers[i]);
-      if (g) {
-        if (this.gunType(this.Guns[i]) === t) {
-          let timer: Timer = this.fireTimers[i];
-          if (start) {
-            timer.start();
-          }
-          else {
-            timer.pause();
-          }
-        }
-      }
-    }
-  }
-  public gunType(g: Gun): BossGun {
-    let i: number = g.name.indexOf('gun');
-    if (i >= 0 && g.name.length >= 6) {
-      let type: string = g.name.substr(i, 3).toLowerCase();
-      if (type === 'smm') {
-        return BossGun.Small;
-      }
-      else if (type === 'big') {
-        return BossGun.Big;
-      }
-      else if (type === 'med') {
-        return BossGun.Med;
-      }
-    }
-    return null;
-  }
   public constructor() {
     super(Files.Model.Boss, null, 2000, 100, 3, new IAFloat(3000, 10000), 100, false, function (ob: PhysicsObject, mod: THREE.Mesh) {
       //Override the default enemy ship fireGun
       let es = ob as Boss;
+
+      es._stateTimer = new WaitTimer(15);
+      es._eState = BossState.Fire;
+      es._posSaved= new Vector3();
 
       //Boss Guns
       es.fireTimers = new Array<Timer>();
@@ -2181,6 +2157,46 @@ class Boss extends EnemyShip {
       me.checkHealth();
     });
   }
+  public update(dt: number) {
+    super.update(dt);
+    this.changeState(dt);
+    this.perform(dt);
+  }
+  public triggerGuns(t: BossGun, start: boolean) {
+    if (this.fireTimers) {
+      for (let i = 0; i < this.fireTimers.length; ++i) {
+        let g: Gun = this._gunTimerMap.get(this.fireTimers[i]);
+        if (g) {
+          if (this.gunType(this.Guns[i]) === t) {
+            let timer: Timer = this.fireTimers[i];
+            if (start) {
+              timer.start();
+            }
+            else {
+              timer.pause();
+            }
+          }
+        }
+      }
+    }
+
+  }
+  public gunType(g: Gun): BossGun {
+    let i: number = g.name.indexOf('gun');
+    if (i >= 0 && g.name.length >= 6) {
+      let type: string = g.name.substr(i, 3).toLowerCase();
+      if (type === 'smm') {
+        return BossGun.Small;
+      }
+      else if (type === 'big') {
+        return BossGun.Big;
+      }
+      else if (type === 'med') {
+        return BossGun.Med;
+      }
+    }
+    return null;
+  }
   protected checkHealth() {
     if (this.health <= 0) {
       this.health = 0;
@@ -2190,11 +2206,7 @@ class Boss extends EnemyShip {
       exitBoss();
     }
   }
-  public update(dt: number) {
-    super.update(dt);
-    this.changeState(dt);
-    this.perform(dt);
-  }
+
   private changeState(dt: number) {
     if (this._stateTimer.update(dt)) {
       this.triggerState();
@@ -2204,6 +2216,7 @@ class Boss extends EnemyShip {
   private triggerState() {
     if (this._eState === BossState.Fire) {
       //Start spinning
+      this._posSaved = new Vector3();
       this._posSaved.copy(this.position);
       this._eState = BossState.Spin;
       this._stateTimer.interval = 7;//spin 7s
@@ -2222,7 +2235,10 @@ class Boss extends EnemyShip {
     else if (this._eState === BossState.Cooldown) {
       //Start Firing the big guns Again
       this._eState = BossState.Fire;
-      this.position.copy(this._posSaved);
+      if(this._posSaved){
+        this.position.copy(this._posSaved);
+      }
+
       this.scale.set(1, 1, 1);
       this._stateTimer.interval = 12; // fire 12s
       this.triggerGuns(BossGun.Big, true);
@@ -2379,10 +2395,10 @@ class Bullet extends Projectile {
         g_particles.createBlasterParticlels(position, c);
       }
       else {
-       // c = new Color(0.1, 0.99193, 0.16134);
+        // c = new Color(0.1, 0.99193, 0.16134);
       }
 
-    //  that.opacity = 0.6;
+      //  that.opacity = 0.6;
       that.position.copy(position);
     });
     let that = this;
@@ -2396,7 +2412,7 @@ class Bullet extends Projectile {
       this.RotationDelta.z = Math.PI * 0.25;
     }
     else if (mod === Files.Model.Triple_Bullet) {
-     // this.RotationDelta.z = Math.PI * 0.570;
+      // this.RotationDelta.z = Math.PI * 0.570;
     }
     else if (mod === Files.Model.Boss_Bomb_Bullet) {
       this.RotationDelta.z = Math.PI * 0.870;
@@ -3393,7 +3409,8 @@ function startGame() {
   g_physics.destroyAllObjects(function (ob: PhysicsObject) { return ob instanceof TitleModel; });
   g_player.showModel();
 
-  g_bossTimer = new Timer(60 * 1000 * 3, function () {
+  //**We are preventing the boss from showing because it's got bugs */
+  g_bossTimer = new Timer(60 * 1000000 * 3, function () {
     enterBoss();
   });
 
