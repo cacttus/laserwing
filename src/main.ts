@@ -385,11 +385,10 @@ class Keyboard {
 
           //f1/2
           if (e.keyCode === 112) { g_audio.disableAudio(); }
-          if (e.keyCode === 113) { g_audio.enableAudio(); }
+          if (e.keyCode === 113) { g_player.levelUp(); }
           //f3
           if (e.keyCode === 114) { enterBoss(); }
           //f4
-          if (e.keyCode === 115) { exitBoss(); }
         }
       }
 
@@ -3504,20 +3503,25 @@ class ShipProb {
   public bullet: Files.Model = Files.Model.Big_Bullet;
   public ship: Files.Model = Files.Model.Big_Bullet;
 }
-function createEnemies() {
+function getNumEnemiesForShipLevel(): number {
   let nShips = 1;
-  if (g_player.ShipLevel > 2) {
-    nShips = Random.float(0, 1) > 0.8 ? 2 : 1;
+  //Increase Difficulty as ship levels
+  if (g_player.ShipLevel <=3) {
+    nShips = (Random.float(0, 1) > 0.8) ? 2 : 1;
   }
-  else if (g_player.ShipLevel > 4) {
-    nShips = Random.float(0, 1) > 0.5 ? 2 : 1;
+  else if (g_player.ShipLevel <=5) {
+    nShips = (Random.float(0, 1) > 0.5) ? 2 : 1;
   }
-  else if (g_player.ShipLevel > 6) {
-    nShips = Random.float(0, 1) > 0.6 ? 3 : 2;
+  else if (g_player.ShipLevel <=7) {
+    nShips = (Random.float(0, 1) > 0.6) ? 3 : 2;
   }
-  else if (g_player.ShipLevel > 8) {
-    nShips = Random.float(0, 1) > 0.5 ? (Random.float(0, 1) > 0.5 ? 4 : 3) : 2;
+  else {
+    nShips = (Random.float(0, 1) > 0.5) ? ((Random.float(0, 1) > 0.5) ? 4 : 3) : 2;
   }
+  return nShips;
+}
+function createEnemies() {
+  let nShips = getNumEnemiesForShipLevel();
 
   for (let i = 0; i < nShips; ++i) {
     let ships: Dictionary<ShipProb> = {};
